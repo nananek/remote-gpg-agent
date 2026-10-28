@@ -84,12 +84,26 @@ describe('createPasskey', () => {
     await createPasskey(withEval as any);
     expect(captured.extensions.prf.eval.first).toBeInstanceOf(Uint8Array);
   });
-  it('clientExtensionResults は JSON 安全な base64url で返す（サーバがパースできる形）', async () => {
+  it('PRF 出力はサーバへ送らない（enabled だけを載せる）', async () => {
     const res: any = await createPasskey(serverOptions as any);
     const ext = res.response.clientExtensionResults;
-    expect(typeof ext.prf.results.first).toBe('string');
-    expect(ext.prf.results.first).toMatch(/^[A-Za-z0-9_-]+$/);
     expect(ext.prf.enabled).toBe(true);
+    expect(ext.prf.results).toBeUndefined();
+  });
+  it('assertion でも clientExtensionResults に PRF 出力を載せない', async () => {
+    const res: any = await assertWithPrf({
+      publicKey: {
+        challenge: 'wKAfPtDD1BuW2hZMgxoSgHMIzai0aUmHeb0Vgaj31dg',
+        rpId: 'localhost',
+        allowCredentials: [{ type: 'public-key', id: 'Y3JlZC0x' }],
+        userVerification: 'required',
+        extensions: { prf: { eval: { first: 'AAAAAA' } } },
+      },
+    } as any);
+    // ローカルでは PRF 出力が取れている
+    expect(res.prfOutput?.length).toBe(32);
+    // しかしサーバへ送る JSON には含まれない
+    expect(res.response.clientExtensionResults.prf.results).toBeUndefined();
   });
 });
 
