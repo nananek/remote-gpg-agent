@@ -9,8 +9,26 @@ import (
 	"github.com/nananek/remote-gpg-agent/internal/store"
 )
 
+func TestWebSecurityHeaders(t *testing.T) {
+	h := newTestServer(t)
+	resp, err := h.webClient().Get(h.webURL("/"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if got := resp.Header.Get("X-Frame-Options"); got != "DENY" {
+		t.Fatalf("X-Frame-Options = %q, want DENY", got)
+	}
+	if got := resp.Header.Get("Content-Security-Policy"); got == "" {
+		t.Fatal("Content-Security-Policy must include frame-ancestors")
+	}
+	if got := resp.Header.Get("X-Content-Type-Options"); got != "nosniff" {
+		t.Fatalf("X-Content-Type-Options = %q, want nosniff", got)
+	}
+}
+
 // TestLogoutCookieAttributes はログアウト時の Set-Cookie が
-// セッション発行時と同じ属性（HttpOnly / SameSite / Secure）を持つことを確かめる。
+// セッション発行時と同じ属性（HttpOnly / SameSite / Secure）が揃っていることを確かめる。
 func TestLogoutCookieAttributes(t *testing.T) {
 	cases := []struct {
 		name   string

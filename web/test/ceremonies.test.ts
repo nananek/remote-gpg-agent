@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { createPasskey, assertWithPrf } from '../src/ceremonies';
 
-/** WebAuthn の JSON 形（サーバが返す {publicKey: ...}）を受けて典礼を回せることを固定する。 */
+/** WebAuthn の JSON 形（サーバが返す {publicKey: ...}）を受けてセレモニーを回せることを固定する。 */
 
 let captured: any = null;
 

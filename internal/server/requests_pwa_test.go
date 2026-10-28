@@ -5,9 +5,84 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nananek/remote-gpg-agent/internal/store"
 )
+
+func TestSignExpiredRequestIsRejected(t *testing.T) {
+	h := newTestServer(t)
+	seedKey(t, h)
+	sid, err := createSessionFor(t, h, "cred-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := h.pwaClient(t)
+	setCookie(t, c, h, sid)
+
+	row, err := store.CreateRequest(t.Context(), h.server.db, store.NewRequestInput{
+		Purpose: "git-commit", Description: "expired", ClientName: "test-client",
+		KeyFingerprint: fprForTest, DataB64: "aGVsbG8=",
+	}, -time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sig := "-----BEGIN PGP SIGNATURE-----\n" + strings.Repeat("A", 64) + "\n-----END PGP SIGNATURE-----"
+	resp, _ := pwaPost(t, c, h.webURL("/api/v1/requests/"+row.ID+"/sign"),
+		map[string]any{"signatureArmored": sig}, nil)
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("expired request must not be signed: got %d", resp.StatusCode)
+	}
+	got, _ := store.GetRequest(t.Context(), h.server.db, row.ID)
+	if got.Status != "expired" {
+		t.Fatalf("status after rejected sign: %s", got.Status)
+	}
+}
+
+func TestAPIResponsesAreNotCacheable(t *testing.T) {
+	h := newTestServer(t)
+	seedKey(t, h)
+	sid, err := createSessionFor(t, h, "cred-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := h.pwaClient(t)
+	setCookie(t, c, h, sid)
+
+	for _, path := range []string{"/api/v1/state", "/api/v1/requests"} {
+		resp, _ := pwaGet(t, c, h.webURL(path))
+		if cc := resp.Header.Get("Cache-Control"); !strings.Contains(cc, "no-store") {
+			t.Fatalf("%s: Cache-Control = %q, want no-store", path, cc)
+		}
+	}
+}
+
+func TestStateChangingAPIRejectsCrossOrigin(t *testing.T) {
+	h := newTestServer(t)
+	seedKey(t, h)
+	sid, err := createSessionFor(t, h, "cred-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := h.pwaClient(t)
+	setCookie(t, c, h, sid)
+	reqID := createRequestFor(t, h)
+
+	resp, _ := pwaPost(t, c, h.webURL("/api/v1/requests/"+reqID+"/deny"),
+		map[string]any{"reason": "csrf"}, map[string]string{"Origin": "https://evil.example"})
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("cross-origin POST: want 403, got %d", resp.StatusCode)
+	}
+	if row, _ := store.GetRequest(context.Background(), h.server.db, reqID); row.Status != "pending" {
+		t.Fatalf("cross-origin deny must not change the request: %+v", row)
+	}
+
+	resp, _ = pwaPost(t, c, h.webURL("/api/v1/requests/"+reqID+"/deny"),
+		map[string]any{"reason": "ok"}, map[string]string{"Origin": h.cfg.Origin})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("same-origin POST: want 200, got %d", resp.StatusCode)
+	}
+}
 
 // 署名要求は「その鍵の envelope を持つ credential」にだけ見える/完了できる。
 // 解錠できない credential のセッションは、ペイロードの閲覧も要求の消費もできない。

@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"encoding/base64"
 	"testing"
 	"time"
 
@@ -142,6 +143,58 @@ func TestExpireStale(t *testing.T) {
 	pending, _ := ListPending(ctx, s)
 	if len(pending) != 0 {
 		t.Fatalf("expired request must not be listed: %d", len(pending))
+	}
+}
+
+func TestCreateRequestRejectsOversizedPayload(t *testing.T) {
+	s := mustOpen(t)
+	in := baseInput()
+	in.DataB64 = base64.StdEncoding.EncodeToString(make([]byte, protocol.MaxDataBytes+1))
+	if _, err := CreateRequest(ctx, s, in, time.Minute); err == nil {
+		t.Fatal("payload over MaxDataBytes must be rejected")
+	}
+}
+
+func TestCompleteAndDenyRejectExpiredRequest(t *testing.T) {
+	s := mustOpen(t)
+	for _, complete := range []bool{true, false} {
+		r, err := CreateRequest(ctx, s, baseInput(), -time.Second)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var ok bool
+		if complete {
+			ok, err = CompleteRequest(ctx, s, r.ID, "SIG")
+		} else {
+			ok, err = DenyRequest(ctx, s, r.ID, "no")
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if ok {
+			t.Fatalf("expired request must not be completed (complete=%v)", complete)
+		}
+		got, _ := GetRequest(ctx, s, r.ID)
+		if got.Status != "expired" || got.DataB64 != "" || got.Description != "" {
+			t.Fatalf("expired request was not swept: %+v", got)
+		}
+	}
+}
+
+func TestExpireRequestOnlyTouchesOneRequest(t *testing.T) {
+	s := mustOpen(t)
+	expired, _ := CreateRequest(ctx, s, baseInput(), -time.Second)
+	fresh, _ := CreateRequest(ctx, s, baseInput(), time.Minute)
+	if err := ExpireRequest(ctx, s, expired.ID); err != nil {
+		t.Fatal(err)
+	}
+	gotExpired, _ := GetRequest(ctx, s, expired.ID)
+	if gotExpired.Status != "expired" {
+		t.Fatalf("expired: %+v", gotExpired)
+	}
+	gotFresh, _ := GetRequest(ctx, s, fresh.ID)
+	if gotFresh.Status != "pending" {
+		t.Fatalf("fresh must stay pending: %+v", gotFresh)
 	}
 }
 

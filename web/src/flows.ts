@@ -90,7 +90,7 @@ async function assertSessionCredential(): Promise<void> {
 }
 
 /**
- * パスキーの典礼で PRF 出力を得る。
+ * パスキーのセレモニーで PRF 出力を得る。
  *
  * 登録 options には salt（prf.eval.first）が入っているので、create() が結果を返す。
  * 返ってこない認証器で「既存パスキーで assert して取り直す」のは誤り

@@ -112,7 +112,7 @@ describe('addPasskey', () => {
     expect(state.keys.map((k) => k.label)).toEqual(['personal']);
   });
 
-  it('解錠していなければ典礼を始めない', async () => {
+  it('解錠していなければセレモニーを始めない', async () => {
     await expect(addPasskey('backup')).rejects.toThrow(/解錠/);
     expect(apiMock.registerOptions).not.toHaveBeenCalled();
   });

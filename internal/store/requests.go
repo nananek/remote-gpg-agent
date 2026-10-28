@@ -11,6 +11,8 @@ import (
 	"time"
 
 	bolt "go.etcd.io/bbolt"
+
+	"github.com/nananek/remote-gpg-agent/internal/protocol"
 )
 
 type Request struct {
@@ -47,6 +49,9 @@ func CreateRequest(_ context.Context, s *Store, in NewRequestInput, ttl time.Dur
 	raw, err := base64.StdEncoding.DecodeString(in.DataB64)
 	if err != nil {
 		return nil, fmt.Errorf("dataB64: %w", err)
+	}
+	if len(raw) > protocol.MaxDataBytes {
+		return nil, fmt.Errorf("dataB64: payload exceeds %d bytes", protocol.MaxDataBytes)
 	}
 	sum := sha256.Sum256(raw)
 	now := time.Now().UTC()
@@ -99,14 +104,37 @@ func ListPending(ctx context.Context, s *Store) ([]*Request, error) {
 	return out, nil
 }
 
-// CompleteRequest は pending のときだけ signed にする。2 回目は ok=false。
+// expiredAt は期限切れ判定。壊れた時刻は「期限切れ」として扱う（fail closed）。
+func expiredAt(expiresAt string, now time.Time) bool {
+	when, err := time.Parse(time.RFC3339, expiresAt)
+	if err != nil {
+		return true
+	}
+	return when.Before(now)
+}
+
+func expirePending(r *Request, now time.Time) bool {
+	if r.Status != "pending" || !expiredAt(r.ExpiresAt, now) {
+		return false
+	}
+	r.Status = "expired"
+	r.DataB64, r.Description = "", ""
+	return true
+}
+
+// CompleteRequest は pending かつ期限内のときだけ signed にする。
+// 期限切れは expired に落として ok=false（署名対象の平文も消す）。
 func CompleteRequest(_ context.Context, s *Store, id, sig string) (bool, error) {
 	ok := false
+	now := time.Now().UTC()
 	err := s.Update(func(tx *bolt.Tx) error {
 		b := tx.Bucket(bReqs)
 		var r Request
 		if err := getJSON(b, []byte(id), &r); err != nil {
 			return err
+		}
+		if expirePending(&r, now) {
+			return putJSON(b, []byte(id), &r)
 		}
 		if r.Status != "pending" {
 			return nil
@@ -122,11 +150,15 @@ func CompleteRequest(_ context.Context, s *Store, id, sig string) (bool, error) 
 
 func DenyRequest(_ context.Context, s *Store, id, reason string) (bool, error) {
 	ok := false
+	now := time.Now().UTC()
 	err := s.Update(func(tx *bolt.Tx) error {
 		b := tx.Bucket(bReqs)
 		var r Request
 		if err := getJSON(b, []byte(id), &r); err != nil {
 			return err
+		}
+		if expirePending(&r, now) {
+			return putJSON(b, []byte(id), &r)
 		}
 		if r.Status != "pending" {
 			return nil
@@ -139,8 +171,25 @@ func DenyRequest(_ context.Context, s *Store, id, reason string) (bool, error) {
 	return ok, err
 }
 
+// ExpireRequest は 1 件だけ期限切れにする。ロングポール中でも期限を
+// 見落とさないように、ポーリングのたびに呼ぶ。
+func ExpireRequest(_ context.Context, s *Store, id string) error {
+	now := time.Now().UTC()
+	return s.Update(func(tx *bolt.Tx) error {
+		b := tx.Bucket(bReqs)
+		var r Request
+		if err := getJSON(b, []byte(id), &r); err != nil {
+			return err
+		}
+		if !expirePending(&r, now) {
+			return nil
+		}
+		return putJSON(b, []byte(id), &r)
+	})
+}
+
 func ExpireStale(_ context.Context, s *Store) error {
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := time.Now().UTC()
 	return s.Update(func(tx *bolt.Tx) error {
 		b := tx.Bucket(bReqs)
 		return forEach(b, func(key, raw []byte) error {
@@ -148,9 +197,7 @@ func ExpireStale(_ context.Context, s *Store) error {
 			if err := jsonUnmarshal(raw, &r); err != nil {
 				return err
 			}
-			if r.Status == "pending" && r.ExpiresAt < now {
-				r.Status = "expired"
-				r.DataB64, r.Description = "", ""
+			if expirePending(&r, now) {
 				return putJSON(b, key, &r)
 			}
 			return nil

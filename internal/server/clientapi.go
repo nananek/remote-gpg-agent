@@ -62,6 +62,9 @@ func (s *Server) handlePollRequest(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	deadline := time.Now().Add(s.cfg.PollDeadline)
 	for {
+		// 期限切れをポーリング中にも反映する。GetRequest は状態を変えないため、
+		// ここで落とさないと期限後も pending を返し続ける。
+		_ = store.ExpireRequest(r.Context(), s.db, id)
 		row, err := store.GetRequest(r.Context(), s.db, id)
 		if err != nil {
 			writeError(w, http.StatusNotFound, "unknown request")
