@@ -161,6 +161,9 @@ func TestPollUnknownRequestIs404(t *testing.T) {
 }
 
 func TestCreateRequestRejectsOversizedPayload(t *testing.T) {
+	old := protocol.MaxDataBytes
+	protocol.MaxDataBytes = 1024
+	t.Cleanup(func() { protocol.MaxDataBytes = old })
 	h := newTestServer(t)
 	c := h.mtlsClient(t)
 	resp, body := postJSON(t, c, h.clientURL("/api/v1/requests"), protocol.CreateSignRequest{

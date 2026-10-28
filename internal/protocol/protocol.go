@@ -4,9 +4,13 @@ import "strings"
 
 const (
 	Version       = 1
-	MaxDataBytes  = 1_000_000
 	RequestTTLSec = 300
 )
+
+// MaxDataBytes は署名対象の上限。makepkg の .pkg.tar.zst (数十 MB) を
+// 扱うため、git commit 用の 1 MB から広げている。テストで上限を下げられる
+// よう const ではなく var。
+var MaxDataBytes = 512 << 20
 
 // KeyIDFromFingerprint は 40 hex の fingerprint から下位 16 hex を返す。不正なら空文字。
 func KeyIDFromFingerprint(fpr string) string {

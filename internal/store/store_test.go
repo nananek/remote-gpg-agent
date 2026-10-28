@@ -147,6 +147,9 @@ func TestExpireStale(t *testing.T) {
 }
 
 func TestCreateRequestRejectsOversizedPayload(t *testing.T) {
+	old := protocol.MaxDataBytes
+	protocol.MaxDataBytes = 1024
+	t.Cleanup(func() { protocol.MaxDataBytes = old })
 	s := mustOpen(t)
 	in := baseInput()
 	in.DataB64 = base64.StdEncoding.EncodeToString(make([]byte, protocol.MaxDataBytes+1))

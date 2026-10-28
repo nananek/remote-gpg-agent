@@ -49,7 +49,7 @@
       <button class="primary" id="unlock">Face ID で解錠</button>
       <p class="meta">登録済みパスキー: ${e.credentialCount} 個</p>
       <p class="error" id="err"></p>
-    </div>`,gm().querySelector(`#unlock`).addEventListener(`click`,e.onUnlock)}function Cm(e){try{return atob(e.dataB64).slice(0,600).replace(/[^\t\n\x20-\x7e]/g,`.`)}catch{return`(preview unavailable)`}}function wm(e){let t=e.requests.map(t=>{let n=e.keys.find(e=>e.fingerprint===t.keyFingerprint.toUpperCase()),r=n?n.label:`この端末では未解錠`;return`
+    </div>`,gm().querySelector(`#unlock`).addEventListener(`click`,e.onUnlock)}function Cm(e){try{let t=e.dataB64.slice(0,800);return atob(t.slice(0,t.length-t.length%4)).slice(0,600).replace(/[^\t\n\x20-\x7e]/g,`.`)}catch{return`(preview unavailable)`}}function wm(e){let t=e.requests.map(t=>{let n=e.keys.find(e=>e.fingerprint===t.keyFingerprint.toUpperCase()),r=n?n.label:`この端末では未解錠`;return`
       <article class="card">
         <h2>${_m(t.purpose)} · ${_m(t.clientName)}</h2>
         <p class="meta">${_m(r)} · ${t.dataSize} バイト · sha256 ${t.dataSha256.slice(0,16)}…</p>

@@ -73,7 +73,10 @@ export function renderUnlock(params: { onUnlock: () => void; credentialCount: nu
 
 function previewOf(r: PendingRequest): string {
   try {
-    const text = atob(r.dataB64).slice(0, 600);
+    // 大きな package でも全 base64 をデコードしない。先頭 800 文字だけ
+    // (4 の倍数に丸める) を atob し、600 バイトを表示する。
+    const chunk = r.dataB64.slice(0, 800);
+    const text = atob(chunk.slice(0, chunk.length - (chunk.length % 4))).slice(0, 600);
     return text.replace(/[^\t\n\x20-\x7e]/g, '.');
   } catch {
     return '(preview unavailable)';
