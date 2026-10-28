@@ -1,0 +1,15 @@
+# ビルドに要るのは vendor/ と web/dist/（go:embed）だけ。それ以外は送らない。
+.git
+.github
+.tmp
+.hermes
+bin
+certs
+deploy/data
+deploy/certs
+deploy/.env
+deploy/rga.env
+web/node_modules
+*.db
+*.db-wal
+*.db-shm

@@ -9,6 +9,20 @@
 - tailnet に参加できること（`TS_AUTHKEY` を用意）
 - そのホストの 443 と 8443 が空いていること
 
+## イメージ
+
+CI（`.github/workflows/image.yml`）が main への push と `v*` タグで
+`ghcr.io/nananek/remote-gpg-agent` を amd64 / arm64 のマルチアーキで publish する。
+
+- 実行イメージは **distroless static の `nonroot`（uid/gid 65532）固定**。`/data` の所有者を
+  65532 にするのはこのため（下の 3. を参照）。
+- shell も curl も入っていない。healthcheck は `/rga-server healthcheck` を直接叩いている。
+- タグ: `latest`（main）、`vX.Y.Z` / `X.Y`（`v*` タグ）、`sha-<commit>`。
+- リポジトリが private のときは、配備先で `docker login ghcr.io`（`read:packages` を持つトークン）が必要。
+- 独自ビルドは `docker compose build` でもよい（`deploy/Dockerfile` は同じものを使う）。
+  compose は `image:` と `build:` の両方を持つので、build したイメージがそのまま使われる。
+  使うタグを固定したいときは `.env` に `RGA_IMAGE=ghcr.io/nananek/remote-gpg-agent:vX.Y.Z` を書く。
+
 ## 1. CA を作る（手元で 1 回だけ）
 
 ```sh
@@ -97,10 +111,12 @@ openssl rand -base64 24     # RGA_BOOTSTRAP_TOKEN
 
 ```sh
 cd /srv/rga
-docker compose build
+docker compose pull        # ghcr のイメージ（distroless nonroot, amd64/arm64）
 docker compose up -d
 docker compose ps          # 2 つとも healthy
 ```
+
+自前でビルドする場合は `docker compose pull` の代わりに `docker compose build`。
 
 ## 6. 動作確認
 

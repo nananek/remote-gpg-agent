@@ -21,10 +21,12 @@ services:
       retries: 3
 
   rga-server:
+    # CI が ghcr へ配るイメージ（distroless static nonroot, amd64/arm64）。
+    # 手元でビルドする場合は `docker compose build`、固定したい場合は .env の RGA_IMAGE で上書きする。
+    image: ${RGA_IMAGE:-ghcr.io/nananek/remote-gpg-agent:latest}
     build:
       context: ..
       dockerfile: deploy/Dockerfile
-    image: remote-gpg-agent:local
     restart: unless-stopped
     # tailscale サイドカーとネットワーク名前空間を共有する（userspace モードなので
     # tailnet からの着信は serve.json の 2 本が唯一の入口）。

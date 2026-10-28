@@ -1,0 +1,128 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  go:
+    name: go (vet / test / build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: false # vendor/ を使うのでモジュールキャッシュは要らない
+
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l ./cmd ./internal ./web)
+          if [ -n "$unformatted" ]; then
+            echo "gofmt が必要です:" >&2
+            echo "$unformatted" >&2
+            exit 1
+          fi
+
+      - run: go vet -mod=vendor ./...
+
+      # e2e は本物の gpg / git を使う（ubuntu-latest には最初から入っている）
+      - run: go test -mod=vendor -race -count=1 ./...
+
+      - run: go build -mod=vendor -trimpath -buildvcs=false -o /tmp/rga-server ./cmd/rga-server
+
+  web:
+    name: web (test / build / dist)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    env:
+      # web/dist は `make web`（NODE_ENV=development）で作ったものが commit されている。
+      # 本番ビルドで上書きするとハッシュが変わり、dist 一致チェックが常に落ちる。
+      NODE_ENV: development
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - run: npm ci
+      - run: npm test
+
+      # dist/ は commit 済みで go:embed される。ソースと一致しないまま
+      # マージされると、バイナリだけ古い PWA を配る事故になる。
+      - run: npm run build
+
+      - name: committed dist matches sources
+        working-directory: .
+        run: |
+          git diff --exit-code -- web/dist
+          test -z "$(git status --porcelain -- web/dist)"
+
+  image:
+    name: image (distroless nonroot)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: docker/setup-buildx-action@v4
+
+      - name: build
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: deploy/Dockerfile
+          platforms: linux/amd64
+          load: true
+          tags: rga-server:ci
+          build-args: VERSION=ci
+
+      # ここが落ちたら配備前提（distroless + nonroot）が壊れている。
+      - name: assert distroless nonroot
+        run: |
+          set -euo pipefail
+          user=$(docker image inspect rga-server:ci --format '{{.Config.User}}')
+          echo "Config.User=$user"
+          case "$user" in
+            nonroot:nonroot | 65532:65532) ;;
+            *)
+              echo "image must run as nonroot (65532), got '$user'" >&2
+              exit 1
+              ;;
+          esac
+
+          # distroless に shell は無い
+          if docker run --rm --entrypoint /bin/sh rga-server:ci -c true 2>/dev/null; then
+            echo "image unexpectedly contains /bin/sh" >&2
+            exit 1
+          fi
+
+          # ベースイメージの宣言（Dockerfile の LABEL）が distroless nonroot であること
+          base=$(docker image inspect rga-server:ci \
+            --format '{{index .Config.Labels "org.opencontainers.image.base.name"}}')
+          echo "base=$base"
+          case "$base" in
+            gcr.io/distroless/*:nonroot) ;;
+            *)
+              echo "base image must be distroless nonroot, got '$base'" >&2
+              exit 1
+              ;;
+          esac
+
+          # 実際に nonroot で起動でき、静的にリンクされたバイナリが動くこと
+          docker run --rm --entrypoint /rga-server rga-server:ci vapid > /tmp/vapid.txt
+          grep -q '^RGA_VAPID_PUBLIC=' /tmp/vapid.txt
