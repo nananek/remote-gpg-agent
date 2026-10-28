@@ -315,7 +315,7 @@ func TestSecondPasskeyMustCoverAllUnlockedKeys(t *testing.T) {
 	}
 }
 
-// 別の credential 用に作られた証明は受け付けない（登録典礼の envelope）。
+// 別の credential 用に作られた証明は受け付けない（登録セレモニーの envelope）。
 func TestSecondPasskeyRejectsProofForAnotherCredential(t *testing.T) {
 	h := newTestServer(t)
 	k := newTestPGPKey(t)

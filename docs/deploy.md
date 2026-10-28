@@ -56,7 +56,7 @@ rsync -a certs/ca.pem certs/server.pem certs/server.key server:/srv/rga/certs/
 mkdir -p /srv/rga/data
 ```
 
-**`data` の所有者を 65532 にする**（distroless の nonroot）。これを忘れると起動即死する:
+**`data` の所有者を 65532 にする**（distroless の nonroot）。これを忘れると起動に失敗する:
 
 ```
 level=ERROR msg=startup err="open /data/rga.db: permission denied"

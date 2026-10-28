@@ -7,7 +7,7 @@ import (
 	"github.com/go-webauthn/webauthn/webauthn"
 )
 
-// webAuthnAPI は go-webauthn の典礼をテストで差し替えられるようにする最小の面。
+// webAuthnAPI は go-webauthn のセレモニーをテストで差し替えられるようにする最小の面。
 // *webauthn.WebAuthn がそのまま満たす。
 type webAuthnAPI interface {
 	BeginRegistration(user webauthn.User, opts ...webauthn.RegistrationOption) (*protocol.CredentialCreation, *webauthn.SessionData, error)
