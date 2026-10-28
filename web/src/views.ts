@@ -131,6 +131,7 @@ export function renderSettings(params: {
   onBack: () => void;
   onAddPasskey: (label: string) => void;
   onAddKey: (v: { label: string; name: string; email: string }) => void;
+  onCopyPublicKey: (fingerprint: string) => void;
   onBackup: (fingerprint: string, passphrase: string) => void;
   onRestore: (armored: string, passphrase: string, label: string) => void;
   onSubscribePush: () => void;
@@ -142,6 +143,7 @@ export function renderSettings(params: {
       <div class="card">
         <h2>${escapeHtml(k.label)}</h2>
         <p class="meta">${escapeHtml(k.fingerprint)}</p>
+        <button data-public="${k.fingerprint}">公開鍵をコピー</button>
         <label for="pass-${k.fingerprint}">バックアップのパスフレーズ</label>
         <input id="pass-${k.fingerprint}" type="password" autocomplete="new-password" />
         <button data-backup="${k.fingerprint}">パスフレーズ付き鍵を書き出す</button>
@@ -204,4 +206,6 @@ export function renderSettings(params: {
   btn('logout').addEventListener('click', params.onLogout);
   root().querySelectorAll<HTMLButtonElement>('[data-backup]').forEach((b) =>
     b.addEventListener('click', () => params.onBackup(b.dataset.backup!, val('pass-' + b.dataset.backup))));
+  root().querySelectorAll<HTMLButtonElement>('[data-public]').forEach((b) =>
+    b.addEventListener('click', () => params.onCopyPublicKey(b.dataset.public!)));
 }

@@ -91,6 +91,20 @@ function showSettings(): void {
           setError((err as Error).message);
         });
     },
+    onCopyPublicKey: (fingerprint) => {
+      flows
+        .publicKey(fingerprint)
+        .then(async (armored) => {
+          try {
+            await navigator.clipboard.writeText(armored);
+            setError('公開鍵をコピーしました');
+          } catch {
+            // クリップボードが使えない環境（iOS の standalone など）では共有シートに落とす。
+            await deliver(`${fingerprint.slice(-16)}-public.asc`, armored);
+          }
+        })
+        .catch((err) => setError((err as Error).message));
+    },
     onBackup: (fingerprint, passphrase) => {
       if (passphrase.length < 8) {
         setError('パスフレーズは 8 文字以上にしてください');

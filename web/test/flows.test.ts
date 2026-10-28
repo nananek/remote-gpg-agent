@@ -28,11 +28,11 @@ vi.mock('../src/pgp', () => ({
 
 import { api } from '../src/api';
 import { assertWithPrf, createPasskey } from '../src/ceremonies';
-import { generateKey, selfTest, signDetached } from '../src/pgp';
+import { describe as describeKey, generateKey, selfTest, signDetached } from '../src/pgp';
 import { b64, unb64 } from '../src/b64';
 import { state, type UnlockedKey } from '../src/state';
 import { deriveWrapKey, open, seal } from '../src/vault';
-import { addKey, addPasskey, unlock } from '../src/flows';
+import { addKey, addPasskey, publicKey, unlock } from '../src/flows';
 
 const apiMock = api as any;
 
@@ -223,5 +223,19 @@ describe('unlock', () => {
 
     await expect(unlock()).rejects.toThrow(/broken/);
     expect(state.keys).toHaveLength(0);
+  });
+});
+
+describe('publicKey', () => {
+  it('解錠中の鍵から公開鍵だけを返す', async () => {
+    state.set('cred-old', [key1()], PRF_OLD);
+    (describeKey as any).mockResolvedValue({ fingerprint: FP1, armoredPublic: 'PUBLIC-1' });
+
+    await expect(publicKey(FP1.toLowerCase())).resolves.toBe('PUBLIC-1');
+    expect(describeKey).toHaveBeenCalledWith('SECRET-1');
+  });
+
+  it('解錠していない fingerprint は拒否する', async () => {
+    await expect(publicKey(FP2)).rejects.toThrow('鍵が見つかりません');
   });
 });

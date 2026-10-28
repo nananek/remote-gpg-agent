@@ -284,6 +284,14 @@ export async function backup(fingerprint: string, passphrase: string): Promise<s
   return exportBackup(key.armoredSecret, passphrase);
 }
 
+/** 公開鍵（armored）。GitHub などへの登録に使う。秘密鍵は含まれない。 */
+export async function publicKey(fingerprint: string): Promise<string> {
+  const key = state.find(fingerprint);
+  if (!key) throw new Error('鍵が見つかりません');
+  const { armoredPublic } = await describe(key.armoredSecret);
+  return armoredPublic;
+}
+
 /** バックアップから復元し、この credential 用に封印し直す。 */
 export async function restore(armored: string, passphrase: string, label: string): Promise<void> {
   const prfOutput = state.prfOutput;
