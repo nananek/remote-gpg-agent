@@ -12,7 +12,7 @@ import {
   root,
   setError,
 } from './views';
-import { subscribePush } from './push';
+import { pushPermission, subscribePush, testPush, unsubscribePush } from './push';
 
 let polling = 0;
 
@@ -39,7 +39,7 @@ async function refresh(): Promise<void> {
       keys: state.keys,
       onSign: (r) => void sign(r),
       onDeny: (r) => void deny(r),
-      onSettings: () => showSettings(),
+      onSettings: () => void showSettings(),
     });
   } catch (err) {
     setError((err as Error).message);
@@ -66,10 +66,19 @@ async function deny(request: PendingRequest): Promise<void> {
   }
 }
 
-function showSettings(): void {
+async function showSettings(): Promise<void> {
   stopPolling();
+  let status = { webpush: false, discord: false };
+  try {
+    status = await api.pushStatus();
+  } catch {
+    /* 通知 API が落ちていても設定画面自体は開く */
+  }
   renderSettings({
     keys: state.keys,
+    pushSubscribed: status.webpush,
+    pushPermission: pushPermission(),
+    discordEnabled: status.discord,
     onBack: () => void refresh().then(startPolling),
     onAddPasskey: (label) => {
       busy('パスキーを追加しています（Face ID）');
@@ -77,7 +86,7 @@ function showSettings(): void {
         .addPasskey(label)
         .then(() => showSettings())
         .catch((err) => {
-          showSettings();
+          void showSettings();
           setError((err as Error).message);
         });
     },
@@ -87,7 +96,7 @@ function showSettings(): void {
         .addKey(v)
         .then(() => showSettings())
         .catch((err) => {
-          showSettings();
+          void showSettings();
           setError((err as Error).message);
         });
     },
@@ -121,13 +130,28 @@ function showSettings(): void {
         .restore(armored, passphrase, label)
         .then(() => showSettings())
         .catch((err) => {
-          showSettings();
+          void showSettings();
           setError((err as Error).message);
         });
     },
     onSubscribePush: () => {
       subscribePush()
-        .then(() => setError('通知を有効にしました'))
+        .then(() => showSettings())
+        .catch((err: unknown) => setError((err as Error).message));
+    },
+    onUnsubscribePush: () => {
+      unsubscribePush()
+        .then(() => showSettings())
+        .catch((err: unknown) => setError((err as Error).message));
+    },
+    onTestPush: () => {
+      testPush('webpush')
+        .then((msg) => setError(msg))
+        .catch((err: unknown) => setError((err as Error).message));
+    },
+    onTestDiscord: () => {
+      testPush('discord')
+        .then((msg) => setError(msg))
         .catch((err: unknown) => setError((err as Error).message));
     },
     onLogout: () => {

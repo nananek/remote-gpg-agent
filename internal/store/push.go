@@ -67,3 +67,22 @@ func DeletePushSubscriptionsForCredential(_ context.Context, s *Store, credentia
 		return nil
 	})
 }
+
+// ListPushSubscriptionsForCredential はその端末（credential）の購読だけ返す。
+// 通知の有効/無効表示とテスト送信に使う。
+func ListPushSubscriptionsForCredential(_ context.Context, s *Store, credentialID string) ([]PushSubscription, error) {
+	out := make([]PushSubscription, 0, 2)
+	err := s.View(func(tx *bolt.Tx) error {
+		return forEach(tx.Bucket(bPush), func(_, raw []byte) error {
+			var sub PushSubscription
+			if err := jsonUnmarshal(raw, &sub); err != nil {
+				return err
+			}
+			if sub.CredentialID == credentialID {
+				out = append(out, sub)
+			}
+			return nil
+		})
+	})
+	return out, err
+}

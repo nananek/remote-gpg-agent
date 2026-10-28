@@ -141,6 +141,21 @@ export PATH="$HOME/.local/bin:$PATH"
 5. 2 台目以降のパスキーは「パスキーを追加」から。いま解錠中のパスキーが開ける鍵が再封印される
    （他のパスキーでしか開けない鍵は引き継がれない）。
 
+### 通知
+
+設定画面の「通知」で Web Push を有効/無効にできる。通知が届かない時は
+「通知を無効にする」→「通知を有効にする」で購読を作り直してから
+「テスト通知を送る」で疎通を確認する（iOS は 設定 → 通知 → remote-gpg-agent も確認）。
+
+Discord にも流したい場合は `rga.env` に webhook を入れて再起動する:
+
+```
+RGA_DISCORD_WEBHOOK=https://discord.com/api/webhooks/...
+```
+
+設定画面に「Discord にテスト送信」が出る。Discord は payload の `description`
+（リポジトリ名程度）と鍵 fingerprint だけを送り、データ本体は送らない。
+
 ## 既知の制約
 
 - パスキーの PRF 拡張が必須（iOS 18+ / Safari、Chrome など）。非対応環境では登録できない。
