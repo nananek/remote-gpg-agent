@@ -8,6 +8,7 @@ type GpgInvocation struct {
 	StatusFD  int
 	StatusSet bool
 	LocalUser string
+	OutFile   string
 	File      string
 }
 
@@ -32,6 +33,14 @@ func ParseGpgArgs(argv []string) GpgInvocation {
 			}
 		case strings.HasPrefix(a, "--local-user="):
 			out.LocalUser = strings.TrimPrefix(a, "--local-user=")
+		case a == "--output" || a == "-o":
+			// 署名の出力先。値は位置引数ではないので、入力ファイルを取り違えないよう読み飛ばす。
+			if i+1 < len(argv) {
+				i++
+				out.OutFile = argv[i]
+			}
+		case strings.HasPrefix(a, "--output="):
+			out.OutFile = strings.TrimPrefix(a, "--output=")
 		case a == "--status-fd":
 			if i+1 < len(argv) {
 				i++

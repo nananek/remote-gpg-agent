@@ -40,6 +40,21 @@ func TestParseGpgArgs(t *testing.T) {
 			args: []string{"--detach-sign", "--local-user=DEADBEEF", "out.sig"},
 			want: GpgInvocation{Detach: true, LocalUser: "DEADBEEF", File: "out.sig"},
 		},
+		{
+			name: "--output takes the signature path and must not swallow the input file",
+			args: []string{"--detach-sign", "--output", "pkg.sig", "pkg.tar.zst"},
+			want: GpgInvocation{Detach: true, OutFile: "pkg.sig", File: "pkg.tar.zst"},
+		},
+		{
+			name: "-o short form",
+			args: []string{"-b", "-o", "pkg.sig", "pkg.tar.zst"},
+			want: GpgInvocation{Detach: true, OutFile: "pkg.sig", File: "pkg.tar.zst"},
+		},
+		{
+			name: "--output= with equals",
+			args: []string{"--detach-sign", "--output=pkg.sig", "pkg.tar.zst"},
+			want: GpgInvocation{Detach: true, OutFile: "pkg.sig", File: "pkg.tar.zst"},
+		},
 	}
 
 	for _, c := range cases {

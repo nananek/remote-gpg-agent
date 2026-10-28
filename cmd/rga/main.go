@@ -138,8 +138,13 @@ func main() {
 		}
 		// gpg は `--detach-sign <file>` のとき <file>.sig を書く（stdout には出さない）。
 		// makepkg はこの .sig を探すので、ファイル入力のときは同じ場所に書く。
-		if inv.File != "" {
-			if err := os.WriteFile(inv.File+".sig", []byte(ensureNL(sig)), 0o644); err != nil {
+		// `-o/--output` が指定されていればそちらを優先する。
+		outPath := inv.OutFile
+		if outPath == "" && inv.File != "" {
+			outPath = inv.File + ".sig"
+		}
+		if outPath != "" {
+			if err := os.WriteFile(outPath, []byte(ensureNL(sig)), 0o644); err != nil {
 				fail(err)
 			}
 			return
