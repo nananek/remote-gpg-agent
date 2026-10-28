@@ -347,6 +347,7 @@ func TestSealKeyThenState(t *testing.T) {
 
 func TestSignIsSingleUseAndDenyWorks(t *testing.T) {
 	h := newTestServer(t)
+	seedKey(t, h) // cred-a が鍵を解錠できる状態にする
 	c := h.pwaClient(t)
 	sid, err := createSessionFor(t, h, "cred-a")
 	if err != nil {

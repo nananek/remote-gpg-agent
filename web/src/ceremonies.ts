@@ -7,23 +7,18 @@ export interface CeremonyResult {
   response: unknown;
 }
 
-function toB64(buf?: ArrayBuffer | null): string | undefined {
-  return buf ? b64url(new Uint8Array(buf)) : undefined;
-}
-
 /**
- * getClientExtensionResults() は ArrayBuffer を返すが、JSON にすると `{}` に潰れて
- * サーバ（go-webauthn）が assertion をパースできない。base64url に直して送る。
+ * サーバへ送る clientExtensionResults を作る。
+ *
+ * PRF の評価結果（results）は envelope を開ける鍵そのものなので、ブラウザの外には
+ * 出さない。サーバが必要とするのは「PRF が使えるか」だけ（登録時に保存する）。
+ * ここで results を落としても、呼び出し側は getClientExtensionResults() から
+ * 直接読むので解錠には影響しない。
  */
 function serializeExtensions(ext: any): any {
   const out: any = {};
   if (ext?.prf) {
     out.prf = { enabled: Boolean(ext.prf.enabled) };
-    const first = toB64(ext.prf.results?.first);
-    const second = toB64(ext.prf.results?.second);
-    if (first || second) {
-      out.prf.results = { ...(first ? { first } : {}), ...(second ? { second } : {}) };
-    }
   }
   return out;
 }
