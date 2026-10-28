@@ -13,6 +13,7 @@ import (
 	"github.com/go-webauthn/webauthn/webauthn"
 
 	"github.com/nananek/remote-gpg-agent/internal/cryptoutil"
+	"github.com/nananek/remote-gpg-agent/internal/pgpverify"
 	rgaproto "github.com/nananek/remote-gpg-agent/internal/protocol"
 	"github.com/nananek/remote-gpg-agent/internal/store"
 )
@@ -186,6 +187,22 @@ func (s *Server) handleRegisterVerify(w http.ResponseWriter, r *http.Request) {
 	} else if len(body.Envelopes) != 0 {
 		writeError(w, http.StatusBadRequest, "the first passkey must not carry envelopes")
 		return
+	}
+
+	// 各 envelope が「その鍵の秘密鍵を持つクライアントが、この新しい credential 用に
+	// 封印した」ことの証明を検証する。サーバは復号できないので、これがないと
+	// 鍵を解錠できない credential でも envelope を名乗れてしまう。
+	for _, e := range body.Envelopes {
+		k, err := store.GetKeyByID(ctx, s.db, e.KeyID)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "unknown key "+e.KeyID)
+			return
+		}
+		msg := rgaproto.EnvelopeProofMessage(credID, e.KeyID, e.HKDFSaltB64, e.IVB64, e.CiphertextB64)
+		if err := pgpverify.ArmoredDetached(k.PublicKeyArmored, k.Fingerprint, msg, e.Proof); err != nil {
+			writeError(w, http.StatusForbidden, err.Error())
+			return
+		}
 	}
 
 	if err := store.InsertCredential(ctx, s.db, store.CredentialRecord{

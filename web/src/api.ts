@@ -93,12 +93,14 @@ export const api = {
   state: () => call<VaultState>('GET', '/api/v1/state'),
 
   sealKey: (body: {
+    credentialId: string;
     fingerprint: string;
     label: string;
     publicKeyArmored: string;
     hkdfSaltB64: string;
     ivB64: string;
     ciphertextB64: string;
+    proof: string;
   }) => call<{ keyId: string }>('POST', '/api/v1/keys', body),
 
   pending: () => call<{ requests: PendingRequest[] }>('GET', '/api/v1/requests?status=pending'),

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 
+	"github.com/nananek/remote-gpg-agent/internal/pgpverify"
 	"github.com/nananek/remote-gpg-agent/internal/protocol"
 	"github.com/nananek/remote-gpg-agent/internal/store"
 )
@@ -66,6 +67,13 @@ func (s *Server) handleSealKey(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid json")
 		return
 	}
+	// クライアントが封印した相手と、いま書き込もうとしているセッションが同じかを
+	// サーバ側でも確かめる。確認と書き込みの間にセッションが変わっても、
+	// 別 credential 用の ciphertext が保存されることはない。
+	if in.CredentialID != credID {
+		writeError(w, http.StatusBadRequest, "credentialId does not match the session")
+		return
+	}
 	keyID := protocol.KeyIDFromFingerprint(in.Fingerprint)
 	if keyID == "" {
 		writeError(w, http.StatusBadRequest, "fingerprint must be 40 hex chars")
@@ -73,6 +81,19 @@ func (s *Server) handleSealKey(w http.ResponseWriter, r *http.Request) {
 	}
 	if in.PublicKeyArmored == "" || in.CiphertextB64 == "" || in.HKDFSaltB64 == "" || in.IVB64 == "" {
 		writeError(w, http.StatusBadRequest, "publicKeyArmored and envelope fields are required")
+		return
+	}
+	if in.Proof == "" {
+		writeError(w, http.StatusBadRequest, "proof is required")
+		return
+	}
+	// その鍵の秘密鍵を持っていることの証明。公開鍵の fingerprint が申告値と
+	// 一致することもここで確認する（armored と fingerprint の取り違え防止）。
+	if err := pgpverify.ArmoredDetached(in.PublicKeyArmored, in.Fingerprint,
+		protocol.EnvelopeProofMessage(credID, keyID, in.HKDFSaltB64, in.IVB64, in.CiphertextB64),
+		in.Proof,
+	); err != nil {
+		writeError(w, http.StatusForbidden, err.Error())
 		return
 	}
 	if in.Label == "" {

@@ -17,6 +17,14 @@ func TestSignResultOmitsEmptyFields(t *testing.T) {
 	}
 }
 
+func TestEnvelopeProofMessage(t *testing.T) {
+	got := string(EnvelopeProofMessage("cred-new", "89ABCDEF01234567", "salt", "iv", "ct"))
+	want := "rga-envelope:v1\ncred-new\n89ABCDEF01234567\nsalt\niv\nct"
+	if got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
 func TestKeyIDFromFingerprint(t *testing.T) {
 	if got := KeyIDFromFingerprint(testFpr); got != "89ABCDEF01234567" {
 		t.Fatalf("got %s", got)

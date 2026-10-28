@@ -1,7 +1,7 @@
 import { api } from './api';
 import { assertWithPrf, createPasskey } from './ceremonies';
 import { generateKey, importBackup, selfTest, signDetached, describe, exportBackup } from './pgp';
-import { deriveWrapKey, open, seal } from './vault';
+import { deriveWrapKey, envelopeProofMessage, open, seal, type Envelope } from './vault';
 import { state, type UnlockedKey } from './state';
 import { sha256Hex, unb64 } from './b64';
 
@@ -17,6 +17,76 @@ interface VaultPayload {
 
 function payloadOf(key: UnlockedKey): VaultPayload {
   return { secret: key.armoredSecret, revocation: key.revocation };
+}
+
+/**
+ * 封印した直後に同じ鍵で開き直す。
+ *
+ * サーバは envelope を復号できない（PRF 出力を持たない）ので、壊れた ciphertext を
+ * 受け取っても検証できない。送る前に往復させて、壊れたものはアップロードしない。
+ */
+async function sealVerified(
+  plaintext: string,
+  wrapKey: CryptoKey,
+  fingerprint: string,
+  hkdfSalt: Uint8Array,
+): Promise<Envelope> {
+  const env = await seal(plaintext, wrapKey, fingerprint, hkdfSalt);
+  if ((await open(env, wrapKey, fingerprint)) !== plaintext) {
+    throw new Error('envelope の自己検証に失敗しました（送信を中止しました）');
+  }
+  return env;
+}
+
+interface SealedEnvelopeForUpload {
+  keyId: string;
+  hkdfSaltB64: string;
+  ivB64: string;
+  ciphertextB64: string;
+  proof: string;
+}
+
+/**
+ * 鍵を封印し、その鍵の秘密鍵で所持証明を付ける。
+ *
+ * サーバは envelope を復号できないので、「本当にその鍵を持っているか」を
+ * 確かめる手段はこの証明だけ。credential と envelope の全フィールドを束ねる。
+ */
+async function sealForKey(
+  prfOutput: Uint8Array,
+  credentialId: string,
+  key: { fingerprint: string; armoredSecret: string },
+  payload: VaultPayload,
+): Promise<{ env: Envelope; upload: SealedEnvelopeForUpload }> {
+  const hkdfSalt = newSalt();
+  const wrapKey = await deriveWrapKey(prfOutput, hkdfSalt);
+  const env = await sealVerified(JSON.stringify(payload), wrapKey, key.fingerprint, hkdfSalt);
+  const keyId = key.fingerprint.slice(-16);
+  const proof = await signDetached(
+    key.armoredSecret,
+    envelopeProofMessage(credentialId, { keyId, ...env }),
+  );
+  return {
+    env,
+    upload: { keyId, hkdfSaltB64: env.hkdfSaltB64, ivB64: env.ivB64, ciphertextB64: env.ciphertextB64, proof },
+  };
+}
+
+/**
+ * セッションの credential と、メモリ上の解錠状態がずれていないか確かめる。
+ *
+ * ずれたまま封印すると、サーバはセッションの credential 用の envelope として保存するのに
+ * 中身は別 credential の PRF で暗号化され、どのパスキーからも開けない鍵になる。
+ * 別タブでログインし直した場合などに起こり得る。
+ */
+async function assertSessionCredential(): Promise<void> {
+  const me = await api.me();
+  if (!me.authenticated || !me.credentialId) {
+    throw new Error('ログインし直してください');
+  }
+  if (me.credentialId !== state.credentialId) {
+    throw new Error('セッションのパスキーが切り替わりました。もう一度解錠してください');
+  }
 }
 
 /**
@@ -53,27 +123,22 @@ export async function bootstrap(params: {
   const generated = await generateKey(params.label, params.name, params.email);
   await selfTest(generated.armoredSecret);
 
-  const hkdfSalt = newSalt();
-  const wrapKey = await deriveWrapKey(prfOutput, hkdfSalt);
-  const env = await seal(
-    JSON.stringify(payloadOf({
-      fingerprint: generated.fingerprint,
-      label: params.label,
-      armoredSecret: generated.armoredSecret,
-      revocation: generated.revocationCertificate,
-    })),
-    wrapKey,
-    generated.fingerprint,
-    hkdfSalt,
+  const sealed = await sealForKey(
+    prfOutput,
+    created.credentialId,
+    { fingerprint: generated.fingerprint, armoredSecret: generated.armoredSecret },
+    { secret: generated.armoredSecret, revocation: generated.revocationCertificate },
   );
 
   await api.sealKey({
+    credentialId: created.credentialId,
     fingerprint: generated.fingerprint,
     label: params.label,
     publicKeyArmored: generated.armoredPublic,
-    hkdfSaltB64: env.hkdfSaltB64,
-    ivB64: env.ivB64,
-    ciphertextB64: env.ciphertextB64,
+    hkdfSaltB64: sealed.env.hkdfSaltB64,
+    ivB64: sealed.env.ivB64,
+    ciphertextB64: sealed.env.ciphertextB64,
+    proof: sealed.upload.proof,
   });
 
   state.set(created.credentialId, [{
@@ -86,8 +151,12 @@ export async function bootstrap(params: {
 
 /**
  * 解錠: 1 回の Face ID でログインと PRF 取得を兼ね、その credential が解ける鍵を全部開ける。
+ *
+ * 復号に失敗した envelope はスキップし、失敗した鍵のラベルを返す。1 個の壊れた
+ * envelope で他の鍵まで使えなくなるのを避ける（サーバは中身を検証できないので、
+ * 過去のクライアント不具合や破損が混ざり得る）。
  */
-export async function unlock(): Promise<void> {
+export async function unlock(): Promise<string[]> {
   const login = await api.loginOptions();
   const assertion = await assertWithPrf(login.options);
   if (!assertion.prfOutput) throw new Error(PRF_MISSING);
@@ -95,6 +164,7 @@ export async function unlock(): Promise<void> {
 
   const vaultState = await api.state();
   const opened: UnlockedKey[] = [];
+  const failed: string[] = [];
 
   for (const keyMeta of vaultState.keys) {
     const env = vaultState.envelopes.find(
@@ -102,27 +172,36 @@ export async function unlock(): Promise<void> {
     );
     if (!env) continue; // この端末では使えない鍵（バックアップから復元できる）
 
-    const wrapKey = await deriveWrapKey(assertion.prfOutput, unb64(env.hkdfSaltB64));
-    const raw = await open(env, wrapKey, keyMeta.fingerprint);
-    const payload = JSON.parse(raw) as VaultPayload;
-    await selfTest(payload.secret);
-    opened.push({
-      fingerprint: keyMeta.fingerprint,
-      label: keyMeta.label,
-      armoredSecret: payload.secret,
-      revocation: payload.revocation,
-    });
+    try {
+      const wrapKey = await deriveWrapKey(assertion.prfOutput, unb64(env.hkdfSaltB64));
+      const raw = await open(env, wrapKey, keyMeta.fingerprint);
+      const payload = JSON.parse(raw) as VaultPayload;
+      await selfTest(payload.secret);
+      opened.push({
+        fingerprint: keyMeta.fingerprint,
+        label: keyMeta.label,
+        armoredSecret: payload.secret,
+        revocation: payload.revocation,
+      });
+    } catch {
+      failed.push(keyMeta.label || keyMeta.fingerprint);
+    }
   }
 
   if (opened.length === 0) {
+    if (failed.length > 0) {
+      throw new Error(`鍵を復号できませんでした（envelope が壊れている可能性）: ${failed.join('、')}`);
+    }
     throw new Error('この端末で使える鍵がありません。バックアップから復元してください。');
   }
   state.set(assertion.credentialId, opened, assertion.prfOutput);
+  return failed;
 }
 
 /** パスキー追加: いま解錠中の鍵を、新しいパスキーの PRF 出力で再封印する。 */
 export async function addPasskey(label: string): Promise<void> {
   if (!state.unlocked) throw new Error('先に解錠してください');
+  await assertSessionCredential();
 
   const reg = await api.registerOptions();
   const created = await createPasskey(reg.options);
@@ -131,23 +210,21 @@ export async function addPasskey(label: string): Promise<void> {
 
   const envelopes = [];
   for (const key of state.keys) {
-    const hkdfSalt = newSalt();
-    const wrapKey = await deriveWrapKey(prfOutput, hkdfSalt);
-    const env = await seal(JSON.stringify(payloadOf(key)), wrapKey, key.fingerprint, hkdfSalt);
-    envelopes.push({
-      keyId: key.fingerprint.slice(-16),
-      hkdfSaltB64: env.hkdfSaltB64,
-      ivB64: env.ivB64,
-      ciphertextB64: env.ciphertextB64,
-    });
+    const sealed = await sealForKey(prfOutput, created.credentialId, key, payloadOf(key));
+    envelopes.push(sealed.upload);
   }
   await api.registerVerify(reg.ceremonyId, created.response, label, envelopes);
+
+  // サーバはこの時点でセッションを新しい credential に張り替えている。
+  // state を追随させないと、直後の addKey / restore が古い PRF 出力で封印してしまう。
+  state.set(created.credentialId, state.keys, prfOutput);
 }
 
 /** 鍵の追加: いま解錠中の credential 用の envelope を 1 つ作る。 */
 export async function addKey(params: { label: string; name: string; email: string }): Promise<UnlockedKey> {
   const prfOutput = state.prfOutput;
   if (!prfOutput) throw new Error('先に解錠してください');
+  await assertSessionCredential();
   if (state.keys.some((k) => k.label === params.label)) {
     throw new Error(`ラベル "${params.label}" は既に使われています`);
   }
@@ -155,22 +232,22 @@ export async function addKey(params: { label: string; name: string; email: strin
   const generated = await generateKey(params.label, params.name, params.email);
   await selfTest(generated.armoredSecret);
 
-  const hkdfSalt = newSalt();
-  const wrapKey = await deriveWrapKey(prfOutput, hkdfSalt);
-  const env = await seal(
-    JSON.stringify({ secret: generated.armoredSecret, revocation: generated.revocationCertificate }),
-    wrapKey,
-    generated.fingerprint,
-    hkdfSalt,
+  const sealed = await sealForKey(
+    prfOutput,
+    state.credentialId,
+    { fingerprint: generated.fingerprint, armoredSecret: generated.armoredSecret },
+    { secret: generated.armoredSecret, revocation: generated.revocationCertificate },
   );
 
   await api.sealKey({
+    credentialId: state.credentialId,
     fingerprint: generated.fingerprint,
     label: params.label,
     publicKeyArmored: generated.armoredPublic,
-    hkdfSaltB64: env.hkdfSaltB64,
-    ivB64: env.ivB64,
-    ciphertextB64: env.ciphertextB64,
+    hkdfSaltB64: sealed.env.hkdfSaltB64,
+    ivB64: sealed.env.ivB64,
+    ciphertextB64: sealed.env.ciphertextB64,
+    proof: sealed.upload.proof,
   });
 
   const unlocked: UnlockedKey = {
@@ -211,22 +288,28 @@ export async function backup(fingerprint: string, passphrase: string): Promise<s
 export async function restore(armored: string, passphrase: string, label: string): Promise<void> {
   const prfOutput = state.prfOutput;
   if (!prfOutput) throw new Error('先に解錠してください');
+  await assertSessionCredential();
 
   const secret = await importBackup(armored, passphrase);
   await selfTest(secret);
   const { fingerprint, armoredPublic } = await describe(secret);
 
-  const hkdfSalt = newSalt();
-  const wrapKey = await deriveWrapKey(prfOutput, hkdfSalt);
-  const env = await seal(JSON.stringify({ secret, revocation: '' }), wrapKey, fingerprint, hkdfSalt);
+  const sealed = await sealForKey(
+    prfOutput,
+    state.credentialId,
+    { fingerprint, armoredSecret: secret },
+    { secret, revocation: '' },
+  );
 
   await api.sealKey({
+    credentialId: state.credentialId,
     fingerprint,
     label,
     publicKeyArmored: armoredPublic,
-    hkdfSaltB64: env.hkdfSaltB64,
-    ivB64: env.ivB64,
-    ciphertextB64: env.ciphertextB64,
+    hkdfSaltB64: sealed.env.hkdfSaltB64,
+    ivB64: sealed.env.ivB64,
+    ciphertextB64: sealed.env.ciphertextB64,
+    proof: sealed.upload.proof,
   });
 
   state.add({ fingerprint, label, armoredSecret: secret, revocation: '' });

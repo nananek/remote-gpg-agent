@@ -179,9 +179,15 @@ async function boot(): Promise<void> {
 async function unlockNow(): Promise<void> {
   busy('解錠しています（Face ID）');
   try {
-    await flows.unlock();
+    const failed = await flows.unlock();
     await refresh();
     startPolling();
+    if (failed.length > 0) {
+      setError(
+        `復号できなかった鍵があります（envelope が壊れている可能性）: ${failed.join('、')}。` +
+          'バックアップから復元してください。',
+      );
+    }
   } catch (err) {
     const me = await api.me().catch(() => null);
     renderUnlock({ credentialCount: me?.credentialCount ?? 0, onUnlock: () => unlockNow() });

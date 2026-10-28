@@ -1,10 +1,22 @@
 import { describe, expect, it } from 'vitest';
-import { deriveWrapKey, open, seal } from '../src/vault';
+import { deriveWrapKey, envelopeProofMessage, open, seal } from '../src/vault';
 
 const prf = new Uint8Array(32).fill(7);
 const fingerprint = 'A'.repeat(40);
 
 describe('vault', () => {
+  it('builds the proof message the server verifies', () => {
+    const msg = new TextDecoder().decode(
+      envelopeProofMessage('cred-new', {
+        keyId: '89ABCDEF01234567',
+        hkdfSaltB64: 'salt',
+        ivB64: 'iv',
+        ciphertextB64: 'ct',
+      }),
+    );
+    expect(msg).toBe('rga-envelope:v1\ncred-new\n89ABCDEF01234567\nsalt\niv\nct');
+  });
+
   it('round-trips the sealed payload', async () => {
     const salt = crypto.getRandomValues(new Uint8Array(32));
     const key = await deriveWrapKey(prf, salt);

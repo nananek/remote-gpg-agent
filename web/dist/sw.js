@@ -1,4 +1,4 @@
-const CACHE = 'rga-v1';
+const CACHE = 'rga-v2';
 const SHELL = ['/', '/manifest.webmanifest'];
 
 self.addEventListener('install', (e) => {
@@ -17,6 +17,22 @@ self.addEventListener('activate', (e) => {
 self.addEventListener('fetch', (e) => {
   const url = new URL(e.request.url);
   if (url.pathname.startsWith('/api/')) return;
+
+  // 画面遷移は network-first。キャッシュ済みの index.html が古い bundle を
+  // 指したままになると、PWA を更新しても動かなくなる。
+  if (e.request.mode === 'navigate') {
+    e.respondWith(
+      fetch(e.request)
+        .then((res) => {
+          const copy = res.clone();
+          caches.open(CACHE).then((c) => c.put('/', copy));
+          return res;
+        })
+        .catch(() => caches.match('/')),
+    );
+    return;
+  }
+
   e.respondWith(caches.match(e.request).then((hit) => hit || fetch(e.request)));
 });
 
