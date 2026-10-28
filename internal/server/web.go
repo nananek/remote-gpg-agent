@@ -15,7 +15,9 @@ func (s *Server) webHandler() http.Handler {
 	})
 	mux.HandleFunc("GET /api/v1/push/vapid-public-key", s.handleVapidPublicKey)
 	mux.HandleFunc("POST /api/v1/push/subscribe", s.handleSubscribe)
-	// Phase 4 で auth / state / keys / requests のルートをここに足す。
+	s.registerAuthRoutes(mux)
+	s.registerVaultRoutes(mux)
+	s.registerPwaRequestRoutes(mux)
 
 	dist, err := fs.Sub(webdist.FS, "dist")
 	if err != nil {

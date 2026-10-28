@@ -14,6 +14,7 @@ import (
 	"math/big"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"testing"
@@ -236,4 +237,54 @@ func seedKey(t *testing.T, h *testStack) {
 	); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func mustListCredentials(t *testing.T, h *testStack) []store.CredentialRecord {
+	t.Helper()
+	recs, err := store.ListCredentials(context.Background(), h.server.db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return recs
+}
+
+// createSessionFor は credential が無ければ作り、そのセッション ID を返す。
+func createSessionFor(t *testing.T, h *testStack, credID string) (string, error) {
+	t.Helper()
+	ctx := context.Background()
+	if _, err := store.GetCredential(ctx, h.server.db, credID); err != nil {
+		if err := store.InsertCredential(ctx, h.server.db, store.CredentialRecord{
+			CredentialID: credID, Label: credID, PRFEnabled: true,
+			Record: webauthn.Credential{ID: []byte(credID), PublicKey: []byte{1}},
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return store.CreateSession(ctx, h.server.db, credID)
+}
+
+func setCookie(t *testing.T, c *http.Client, h *testStack, sid string) {
+	t.Helper()
+	u, err := url.Parse(h.webURL("/"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Jar.SetCookies(u, []*http.Cookie{{Name: store.SessionCookie, Value: sid, Path: "/"}})
+}
+
+func storeEnvelopesFor(t *testing.T, h *testStack, credID string) ([]protocol.Envelope, error) {
+	t.Helper()
+	return store.ListEnvelopesForCredential(context.Background(), h.server.db, credID)
+}
+
+func createRequestFor(t *testing.T, h *testStack) string {
+	t.Helper()
+	row, err := store.CreateRequest(context.Background(), h.server.db, store.NewRequestInput{
+		Purpose: "git-commit", Description: "repos/foo", ClientName: "workstation",
+		KeyFingerprint: fprForTest, DataB64: "aGVsbG8=", TextMode: true,
+	}, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return row.ID
 }
