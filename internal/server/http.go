@@ -7,6 +7,8 @@ import (
 
 func writeJSON(w http.ResponseWriter, code int, v any) {
 	w.Header().Set("content-type", "application/json; charset=utf-8")
+	// 認証済みデータをブラウザの HTTP キャッシュに残さない。
+	w.Header().Set("cache-control", "no-store")
 	w.WriteHeader(code)
 	_ = json.NewEncoder(w).Encode(v)
 }

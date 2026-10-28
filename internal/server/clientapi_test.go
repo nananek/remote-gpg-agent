@@ -1,6 +1,7 @@
 package server
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/nananek/remote-gpg-agent/internal/protocol"
+	"github.com/nananek/remote-gpg-agent/internal/store"
 )
 
 func TestMTLSRejectsClientWithoutCertificate(t *testing.T) {
@@ -155,6 +157,42 @@ func TestPollUnknownRequestIs404(t *testing.T) {
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("status=%d", resp.StatusCode)
+	}
+}
+
+func TestCreateRequestRejectsOversizedPayload(t *testing.T) {
+	h := newTestServer(t)
+	c := h.mtlsClient(t)
+	resp, body := postJSON(t, c, h.clientURL("/api/v1/requests"), protocol.CreateSignRequest{
+		Purpose: "git-commit", Description: "big", KeyFingerprint: fprForTest,
+		DataB64: base64.StdEncoding.EncodeToString(make([]byte, protocol.MaxDataBytes+1)),
+	})
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("want 400 for oversized payload, got %d: %s", resp.StatusCode, body)
+	}
+}
+
+func TestPollExpiredRequestReturnsExpired(t *testing.T) {
+	h := newTestServer(t)
+	row, err := store.CreateRequest(t.Context(), h.server.db, store.NewRequestInput{
+		Purpose: "git-commit", Description: "expired", ClientName: "test-client",
+		KeyFingerprint: fprForTest, DataB64: "aGVsbG8=",
+	}, -time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	resp, err := h.mtlsClient(t).Get(h.clientURL("/api/v1/requests/" + row.ID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var res protocol.SignResult
+	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
+		t.Fatal(err)
+	}
+	if res.Status != "expired" {
+		t.Fatalf("expired request must not stay pending: %+v", res)
 	}
 }
 
