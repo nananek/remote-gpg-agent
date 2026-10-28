@@ -148,6 +148,8 @@ func TestGitCommitWithRemoteSigning(t *testing.T) {
 	}
 	run(t, env, repo, "git", "config", "user.email", "e2e@example.com")
 	run(t, env, repo, "git", "config", "user.name", "e2e")
+	// 利用者のグローバル設定（gpg.format=ssh など）に左右されないよう、このリポジトリで固定する。
+	run(t, env, repo, "git", "config", "gpg.format", "openpgp")
 	run(t, env, repo, "git", "config", "gpg.program", wrapper)
 	run(t, env, repo, "git", "config", "user.signingkey", s.fingerprint)
 	run(t, env, repo, "git", "add", "a.txt")

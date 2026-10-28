@@ -46,6 +46,7 @@ internal/client/   gpg 引数パース、mTLS transport、署名ループ
 internal/pgpverify/ 返却署名のローカル検証
 web/               PWA（Vite + TypeScript + OpenPGP.js v6）。ビルド成果物 dist/ は commit 済み
 deploy/            Dockerfile / docker-compose.yml / tailscale serve 設定
+.github/           CI（テスト + ghcr への distroless nonroot イメージ publish）
 ```
 
 ## 開発
@@ -109,6 +110,7 @@ rga keys        # PWA で作った鍵が出る
 ```sh
 install -m 755 scripts/rga-gpg-sign ~/.local/bin/rga-gpg-sign
 git config --global gpg.program ~/.local/bin/rga-gpg-sign
+git config --global gpg.format openpgp
 git config --global user.signingkey <fingerprint>
 git config --global commit.gpgsign true
 ```

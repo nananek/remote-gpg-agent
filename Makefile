@@ -6,7 +6,7 @@ GO_RUN = docker run --rm -e HOME=/tmp -e GOCACHE=/tmp/gocache \
 	-e GOFLAGS="-mod=vendor -buildvcs=false" -e GOPROXY=off \
 	-v $(CURDIR):/src -w /src $(GO_IMAGE) go
 
-.PHONY: build test vet fmt web vapid
+.PHONY: build test vet fmt web vapid image
 
 build:
 	$(GO_RUN) build -o bin/rga-server ./cmd/rga-server
@@ -26,3 +26,8 @@ web:
 
 vapid:
 	$(GO_RUN) run ./cmd/rga-server vapid
+
+# CI と同じ distroless nonroot イメージ（ローカル確認用, ホストの arch のみ）
+IMAGE ?= ghcr.io/nananek/remote-gpg-agent:dev
+image:
+	docker build -f deploy/Dockerfile -t $(IMAGE) .
