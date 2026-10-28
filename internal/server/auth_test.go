@@ -141,6 +141,11 @@ func TestRegisterOptionsRequestsPRF(t *testing.T) {
 	if !strings.Contains(string(options), `"prf"`) {
 		t.Fatalf("registration options must request PRF: %s", options)
 	}
+	// 登録時にも salt を渡して評価させる。渡さないと認証器は PRF 出力を返さず、
+	// 既存パスキーで取り直した PRF で封印する事故になる（増設パスキーが開かなくなる）。
+	if !strings.Contains(string(options), `"eval"`) {
+		t.Fatalf("registration options must evaluate PRF (prf.eval.first): %s", options)
+	}
 	if !strings.Contains(string(options), "challenge") {
 		t.Fatalf("missing challenge: %s", options)
 	}

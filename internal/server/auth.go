@@ -83,8 +83,12 @@ func (s *Server) handleRegisterOptions(w http.ResponseWriter, r *http.Request) {
 			UserVerification: protocol.VerificationRequired,
 		}),
 		webauthn.WithExclusions(excl),
-		// PRF が使えるかを登録時に問う。結果は credential.Extensions.PRFEnabled に入る。
-		webauthn.WithExtensions(webauthn.WithExtensionPRFSupport()),
+		// PRF が使えるかを登録時に問い、さらに salt を渡して評価させる。
+		// salt を渡さないと認証器は PRF 出力を返さず、封印鍵を作れない。
+		webauthn.WithExtensions(
+			webauthn.WithExtensionPRFSupport(),
+			webauthn.WithExtensionPRF(protocol.PRFValues{First: protocol.URLEncodedBase64(PRFSalt)}),
+		),
 	)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())

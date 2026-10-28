@@ -19,14 +19,18 @@ function payloadOf(key: UnlockedKey): VaultPayload {
   return { secret: key.armoredSecret, revocation: key.revocation };
 }
 
-/** パスキーの典礼で PRF 出力を得る。create() が返さない認証器では assert で取り直す。 */
+/**
+ * パスキーの典礼で PRF 出力を得る。
+ *
+ * 登録 options には salt（prf.eval.first）が入っているので、create() が結果を返す。
+ * 返ってこない認証器で「既存パスキーで assert して取り直す」のは誤り
+ * （新しい credential の PRF ではないため、その envelope は二度と開けない）。
+ */
 async function prfFromRegistration(created: { prfOutput?: Uint8Array }): Promise<Uint8Array> {
-  if (created.prfOutput) return created.prfOutput;
-  const login = await api.loginOptions();
-  const assertion = await assertWithPrf(login.options);
-  if (!assertion.prfOutput) throw new Error(PRF_MISSING);
-  await api.loginVerify(login.ceremonyId, assertion.response);
-  return assertion.prfOutput;
+  if (!created.prfOutput) {
+    throw new Error(PRF_MISSING + '（登録時に PRF の評価結果が返りませんでした）');
+  }
+  return created.prfOutput;
 }
 
 /**
