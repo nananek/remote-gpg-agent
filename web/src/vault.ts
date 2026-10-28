@@ -8,6 +8,24 @@ export interface Envelope {
   ciphertextB64: string;
 }
 
+/**
+ * サーバが envelope の所持証明として検証する正規化メッセージ。
+ * Go 側の protocol.EnvelopeProofMessage と同じ順序・区切りで組む。
+ */
+export function envelopeProofMessage(
+  credentialId: string,
+  env: { keyId: string; hkdfSaltB64: string; ivB64: string; ciphertextB64: string },
+): Uint8Array {
+  return new TextEncoder().encode([
+    'rga-envelope:v1',
+    credentialId,
+    env.keyId,
+    env.hkdfSaltB64,
+    env.ivB64,
+    env.ciphertextB64,
+  ].join('\n'));
+}
+
 /** PRF 出力（32B）→ HKDF-SHA256 → AES-256-GCM 鍵。 */
 export async function deriveWrapKey(prfOutput: Uint8Array, hkdfSalt: Uint8Array): Promise<CryptoKey> {
   const base = await crypto.subtle.importKey('raw', prfOutput as BufferSource, 'HKDF', false, ['deriveKey']);

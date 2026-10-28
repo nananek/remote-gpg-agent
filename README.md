@@ -24,6 +24,8 @@ iPhone の PWA から `git commit -S` / `makepkg --sign` を完了させるた�
 | rga client | クライアント証明書、ピン留めした fingerprint | 秘密鍵 |
 
 - envelope は `HKDF-SHA256(PRF出力, salt)` → AES-256-GCM。AAD は鍵の fingerprint。
+- envelope を紐付けるには、その鍵の秘密鍵による所持証明（credential・keyId・salt・IV・ciphertext への署名）が要る。
+  サーバは公開鍵で検証し、封印先の credential がセッションと一致しない要求も拒否する。
 - PRF 非対応の authenticator は登録時に拒否する（解錠できないパスキーを作らせない）。
 - パスキーは増やせる。追加したパスキーには、そのとき解錠していたパスキーが開ける鍵だけが再封印される
   （全鍵を自動で引き継ぐわけではない。他のパスキーでしか開けない鍵は、そのパスキーで解錠して扱う）。

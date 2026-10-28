@@ -28,7 +28,7 @@ vi.mock('../src/pgp', () => ({
 
 import { api } from '../src/api';
 import { assertWithPrf, createPasskey } from '../src/ceremonies';
-import { generateKey, selfTest } from '../src/pgp';
+import { generateKey, selfTest, signDetached } from '../src/pgp';
 import { b64, unb64 } from '../src/b64';
 import { state, type UnlockedKey } from '../src/state';
 import { deriveWrapKey, open, seal } from '../src/vault';
@@ -54,6 +54,7 @@ beforeEach(() => {
   apiMock.registerVerify.mockResolvedValue({ credentialId: 'cred-new' });
   apiMock.sealKey.mockResolvedValue({ keyId: KEY_ID_2 });
   (selfTest as any).mockResolvedValue(undefined);
+  (signDetached as any).mockResolvedValue('PROOF');
 });
 
 describe('addPasskey', () => {
@@ -74,6 +75,18 @@ describe('addPasskey', () => {
     expect(envelopes[0].keyId).toBe(KEY_ID_1);
     // 送るのは ciphertext だけで、armored 秘密鍵は含まれない。
     expect(JSON.stringify(envelopes)).not.toContain('SECRET-1');
+
+    // 所持証明は「新しい credential × この envelope」に束縛される。
+    expect(envelopes[0].proof).toBe('PROOF');
+    const proofMessage = new TextDecoder().decode((signDetached as any).mock.calls[0][1]);
+    expect(proofMessage).toBe([
+      'rga-envelope:v1',
+      'cred-new',
+      KEY_ID_1,
+      envelopes[0].hkdfSaltB64,
+      envelopes[0].ivB64,
+      envelopes[0].ciphertextB64,
+    ].join('\n'));
 
     const withNew = await deriveWrapKey(PRF_NEW, unb64(envelopes[0].hkdfSaltB64));
     expect(JSON.parse(await open(envelopes[0], withNew, FP1)).secret).toBe('SECRET-1');
@@ -132,6 +145,10 @@ describe('addKey after addPasskey', () => {
     });
 
     await addKey({ label: 'second', name: 'n', email: 'e' });
+
+    // 封印先の credential を明示し、その credential 用の所持証明を付ける。
+    expect(sealed.credentialId).toBe('cred-new');
+    expect(sealed.proof).toBe('PROOF');
 
     const withNew = await deriveWrapKey(PRF_NEW, unb64(sealed.hkdfSaltB64));
     expect(JSON.parse(await open(sealed, withNew, FP2)).secret).toBe('SECRET-2');

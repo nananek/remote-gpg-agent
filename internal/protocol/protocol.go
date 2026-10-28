@@ -83,12 +83,16 @@ type PendingSignRequest struct {
 }
 
 type SealKeyRequest struct {
+	// CredentialID は封印先の credential。セッションと一致しない要求は拒否する。
+	CredentialID     string `json:"credentialId"`
 	Fingerprint      string `json:"fingerprint"`
 	Label            string `json:"label"`
 	PublicKeyArmored string `json:"publicKeyArmored"`
 	HKDFSaltB64      string `json:"hkdfSaltB64"`
 	IVB64            string `json:"ivB64"`
 	CiphertextB64    string `json:"ciphertextB64"`
+	// Proof は envelope をこの鍵で封印したことの detached signature。
+	Proof string `json:"proof"`
 }
 
 type SealedEnvelope struct {
@@ -96,4 +100,17 @@ type SealedEnvelope struct {
 	HKDFSaltB64   string `json:"hkdfSaltB64"`
 	IVB64         string `json:"ivB64"`
 	CiphertextB64 string `json:"ciphertextB64"`
+	Proof         string `json:"proof"`
+}
+
+// EnvelopeProofV1 は所持証明のドメイン分離ラベル。
+const EnvelopeProofV1 = "rga-envelope:v1"
+
+// EnvelopeProofMessage は envelope の所持証明で署名する正規化メッセージ。
+// credential と envelope の全フィールドを束ねるので、別 credential・別鍵・
+// 別 ciphertext への差し替えは検証で落ちる。PWA 側と同じ順序で組むこと。
+func EnvelopeProofMessage(credentialID, keyID, hkdfSaltB64, ivB64, ciphertextB64 string) []byte {
+	return []byte(strings.Join([]string{
+		EnvelopeProofV1, credentialID, keyID, hkdfSaltB64, ivB64, ciphertextB64,
+	}, "\n"))
 }

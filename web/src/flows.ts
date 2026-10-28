@@ -1,7 +1,7 @@
 import { api } from './api';
 import { assertWithPrf, createPasskey } from './ceremonies';
 import { generateKey, importBackup, selfTest, signDetached, describe, exportBackup } from './pgp';
-import { deriveWrapKey, open, seal, type Envelope } from './vault';
+import { deriveWrapKey, envelopeProofMessage, open, seal, type Envelope } from './vault';
 import { state, type UnlockedKey } from './state';
 import { sha256Hex, unb64 } from './b64';
 
@@ -38,11 +38,38 @@ async function sealVerified(
   return env;
 }
 
-/** 1 つの鍵を、指定した PRF 出力で封印する（salt と IV は毎回新しくする）。 */
-async function sealForKey(prfOutput: Uint8Array, key: UnlockedKey): Promise<Envelope> {
+interface SealedEnvelopeForUpload {
+  keyId: string;
+  hkdfSaltB64: string;
+  ivB64: string;
+  ciphertextB64: string;
+  proof: string;
+}
+
+/**
+ * 鍵を封印し、その鍵の秘密鍵で所持証明を付ける。
+ *
+ * サーバは envelope を復号できないので、「本当にその鍵を持っているか」を
+ * 確かめる手段はこの証明だけ。credential と envelope の全フィールドを束ねる。
+ */
+async function sealForKey(
+  prfOutput: Uint8Array,
+  credentialId: string,
+  key: { fingerprint: string; armoredSecret: string },
+  payload: VaultPayload,
+): Promise<{ env: Envelope; upload: SealedEnvelopeForUpload }> {
   const hkdfSalt = newSalt();
   const wrapKey = await deriveWrapKey(prfOutput, hkdfSalt);
-  return sealVerified(JSON.stringify(payloadOf(key)), wrapKey, key.fingerprint, hkdfSalt);
+  const env = await sealVerified(JSON.stringify(payload), wrapKey, key.fingerprint, hkdfSalt);
+  const keyId = key.fingerprint.slice(-16);
+  const proof = await signDetached(
+    key.armoredSecret,
+    envelopeProofMessage(credentialId, { keyId, ...env }),
+  );
+  return {
+    env,
+    upload: { keyId, hkdfSaltB64: env.hkdfSaltB64, ivB64: env.ivB64, ciphertextB64: env.ciphertextB64, proof },
+  };
 }
 
 /**
@@ -96,27 +123,22 @@ export async function bootstrap(params: {
   const generated = await generateKey(params.label, params.name, params.email);
   await selfTest(generated.armoredSecret);
 
-  const hkdfSalt = newSalt();
-  const wrapKey = await deriveWrapKey(prfOutput, hkdfSalt);
-  const env = await sealVerified(
-    JSON.stringify(payloadOf({
-      fingerprint: generated.fingerprint,
-      label: params.label,
-      armoredSecret: generated.armoredSecret,
-      revocation: generated.revocationCertificate,
-    })),
-    wrapKey,
-    generated.fingerprint,
-    hkdfSalt,
+  const sealed = await sealForKey(
+    prfOutput,
+    created.credentialId,
+    { fingerprint: generated.fingerprint, armoredSecret: generated.armoredSecret },
+    { secret: generated.armoredSecret, revocation: generated.revocationCertificate },
   );
 
   await api.sealKey({
+    credentialId: created.credentialId,
     fingerprint: generated.fingerprint,
     label: params.label,
     publicKeyArmored: generated.armoredPublic,
-    hkdfSaltB64: env.hkdfSaltB64,
-    ivB64: env.ivB64,
-    ciphertextB64: env.ciphertextB64,
+    hkdfSaltB64: sealed.env.hkdfSaltB64,
+    ivB64: sealed.env.ivB64,
+    ciphertextB64: sealed.env.ciphertextB64,
+    proof: sealed.upload.proof,
   });
 
   state.set(created.credentialId, [{
@@ -188,13 +210,8 @@ export async function addPasskey(label: string): Promise<void> {
 
   const envelopes = [];
   for (const key of state.keys) {
-    const env = await sealForKey(prfOutput, key);
-    envelopes.push({
-      keyId: key.fingerprint.slice(-16),
-      hkdfSaltB64: env.hkdfSaltB64,
-      ivB64: env.ivB64,
-      ciphertextB64: env.ciphertextB64,
-    });
+    const sealed = await sealForKey(prfOutput, created.credentialId, key, payloadOf(key));
+    envelopes.push(sealed.upload);
   }
   await api.registerVerify(reg.ceremonyId, created.response, label, envelopes);
 
@@ -215,22 +232,22 @@ export async function addKey(params: { label: string; name: string; email: strin
   const generated = await generateKey(params.label, params.name, params.email);
   await selfTest(generated.armoredSecret);
 
-  const hkdfSalt = newSalt();
-  const wrapKey = await deriveWrapKey(prfOutput, hkdfSalt);
-  const env = await sealVerified(
-    JSON.stringify({ secret: generated.armoredSecret, revocation: generated.revocationCertificate }),
-    wrapKey,
-    generated.fingerprint,
-    hkdfSalt,
+  const sealed = await sealForKey(
+    prfOutput,
+    state.credentialId,
+    { fingerprint: generated.fingerprint, armoredSecret: generated.armoredSecret },
+    { secret: generated.armoredSecret, revocation: generated.revocationCertificate },
   );
 
   await api.sealKey({
+    credentialId: state.credentialId,
     fingerprint: generated.fingerprint,
     label: params.label,
     publicKeyArmored: generated.armoredPublic,
-    hkdfSaltB64: env.hkdfSaltB64,
-    ivB64: env.ivB64,
-    ciphertextB64: env.ciphertextB64,
+    hkdfSaltB64: sealed.env.hkdfSaltB64,
+    ivB64: sealed.env.ivB64,
+    ciphertextB64: sealed.env.ciphertextB64,
+    proof: sealed.upload.proof,
   });
 
   const unlocked: UnlockedKey = {
@@ -277,17 +294,22 @@ export async function restore(armored: string, passphrase: string, label: string
   await selfTest(secret);
   const { fingerprint, armoredPublic } = await describe(secret);
 
-  const hkdfSalt = newSalt();
-  const wrapKey = await deriveWrapKey(prfOutput, hkdfSalt);
-  const env = await sealVerified(JSON.stringify({ secret, revocation: '' }), wrapKey, fingerprint, hkdfSalt);
+  const sealed = await sealForKey(
+    prfOutput,
+    state.credentialId,
+    { fingerprint, armoredSecret: secret },
+    { secret, revocation: '' },
+  );
 
   await api.sealKey({
+    credentialId: state.credentialId,
     fingerprint,
     label,
     publicKeyArmored: armoredPublic,
-    hkdfSaltB64: env.hkdfSaltB64,
-    ivB64: env.ivB64,
-    ciphertextB64: env.ciphertextB64,
+    hkdfSaltB64: sealed.env.hkdfSaltB64,
+    ivB64: sealed.env.ivB64,
+    ciphertextB64: sealed.env.ciphertextB64,
+    proof: sealed.upload.proof,
   });
 
   state.add({ fingerprint, label, armoredSecret: secret, revocation: '' });

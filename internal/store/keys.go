@@ -63,6 +63,14 @@ func ListKeys(_ context.Context, s *Store) ([]protocol.KeyMeta, error) {
 	return out, err
 }
 
+func GetKeyByID(_ context.Context, s *Store, keyID string) (protocol.KeyMeta, error) {
+	var k protocol.KeyMeta
+	err := s.View(func(tx *bolt.Tx) error {
+		return getJSON(tx.Bucket(bKeys), []byte(keyID), &k)
+	})
+	return k, err
+}
+
 func GetKeyByFingerprint(_ context.Context, s *Store, fpr string) (protocol.KeyMeta, error) {
 	var k protocol.KeyMeta
 	err := s.View(func(tx *bolt.Tx) error {

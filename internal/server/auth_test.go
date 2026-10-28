@@ -11,6 +11,10 @@ import (
 
 	"github.com/go-webauthn/webauthn/protocol"
 	"github.com/go-webauthn/webauthn/webauthn"
+
+	"github.com/nananek/remote-gpg-agent/internal/cryptoutil"
+	rgaproto "github.com/nananek/remote-gpg-agent/internal/protocol"
+	"github.com/nananek/remote-gpg-agent/internal/store"
 )
 
 // fakeWA は検証フェーズだけを差し替える。Begin* は本物と同じ形の応答を返す。
@@ -243,10 +247,25 @@ func TestRegisterVerifyRejectsEnvelopesWithoutSession(t *testing.T) {
 
 func TestSecondPasskeyMustCoverAllUnlockedKeys(t *testing.T) {
 	h := newTestServer(t)
-	seedKey(t, h) // cred-a と鍵 1 本
+	// cred-a が実鍵を 1 本持っている状態にする（所持証明の検証を通すため実鍵を使う）。
+	k := newTestPGPKey(t)
+	keyID := rgaproto.KeyIDFromFingerprint(k.fpr)
+	ctx := t.Context()
+	if err := store.InsertCredential(ctx, h.server.db, store.CredentialRecord{
+		CredentialID: "cred-a", Label: "cred-a", PRFEnabled: true,
+		Record: webauthn.Credential{ID: []byte("cred-a"), PublicKey: []byte{1}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.UpsertKey(ctx, h.server.db, rgaproto.KeyMeta{
+		KeyID: keyID, Fingerprint: k.fpr, Label: "personal", PublicKeyArmored: k.publicArmored,
+	}, rgaproto.Envelope{
+		CredentialID: "cred-a", KeyID: keyID, HKDFSaltB64: "a", IVB64: "b", CiphertextB64: "c",
+	}); err != nil {
+		t.Fatal(err)
+	}
 	h.server.wa = &fakeWA{credentialID: []byte("cred-b"), prfEnabled: true}
 
-	ctx := t.Context()
 	sid, err := createSessionFor(t, h, "cred-a")
 	if err != nil {
 		t.Fatal(err)
@@ -269,22 +288,23 @@ func TestSecondPasskeyMustCoverAllUnlockedKeys(t *testing.T) {
 	// 全部そろえる → 200
 	_, body = pwaPost(t, c, h.webURL("/api/v1/auth/register/options"), map[string]any{}, nil)
 	ceremonyID, _ = body["ceremonyId"].(string)
+	newCredID := cryptoutil.B64URL([]byte("cred-b"))
 	resp, respBody := pwaPost(t, c, h.webURL("/api/v1/auth/register/verify"), map[string]any{
 		"ceremonyId": ceremonyID,
 		"response":   map[string]any{"id": "cred-b"},
 		"envelopes": []map[string]any{{
-			"keyId": "89ABCDEF01234567", "hkdfSaltB64": "a2", "ivB64": "b2", "ciphertextB64": "c2",
+			"keyId": keyID, "hkdfSaltB64": "a2", "ivB64": "b2", "ciphertextB64": "c2",
+			"proof": k.proof(t, newCredID, keyID, "a2", "b2", "c2"),
 		}},
 	}, nil)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("want 200, got %d: %v", resp.StatusCode, respBody)
 	}
-	_ = ctx
 
 	// credential ID は base64url 化されて保存される（ブラウザ側の ID と一致）。
-	newCredID, _ := respBody["credentialId"].(string)
-	if newCredID == "" {
-		t.Fatalf("missing credentialId: %v", respBody)
+	gotCredID, _ := respBody["credentialId"].(string)
+	if gotCredID != newCredID {
+		t.Fatalf("credentialId: want %s, got %v", newCredID, respBody)
 	}
 	envs, err := storeEnvelopesFor(t, h, newCredID)
 	if err != nil {
@@ -292,6 +312,52 @@ func TestSecondPasskeyMustCoverAllUnlockedKeys(t *testing.T) {
 	}
 	if len(envs) != 1 || envs[0].IVB64 != "b2" {
 		t.Fatalf("envelopes for %s: %+v", newCredID, envs)
+	}
+}
+
+// 別の credential 用に作られた証明は受け付けない（登録典礼の envelope）。
+func TestSecondPasskeyRejectsProofForAnotherCredential(t *testing.T) {
+	h := newTestServer(t)
+	k := newTestPGPKey(t)
+	keyID := rgaproto.KeyIDFromFingerprint(k.fpr)
+	ctx := t.Context()
+	if err := store.InsertCredential(ctx, h.server.db, store.CredentialRecord{
+		CredentialID: "cred-a", Label: "cred-a", PRFEnabled: true,
+		Record: webauthn.Credential{ID: []byte("cred-a"), PublicKey: []byte{1}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.UpsertKey(ctx, h.server.db, rgaproto.KeyMeta{
+		KeyID: keyID, Fingerprint: k.fpr, Label: "personal", PublicKeyArmored: k.publicArmored,
+	}, rgaproto.Envelope{
+		CredentialID: "cred-a", KeyID: keyID, HKDFSaltB64: "a", IVB64: "b", CiphertextB64: "c",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	h.server.wa = &fakeWA{credentialID: []byte("cred-b"), prfEnabled: true}
+
+	sid, err := createSessionFor(t, h, "cred-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := h.pwaClient(t)
+	setCookie(t, c, h, sid)
+
+	_, body := pwaPost(t, c, h.webURL("/api/v1/auth/register/options"), map[string]any{}, nil)
+	ceremonyID, _ := body["ceremonyId"].(string)
+	resp, _ := pwaPost(t, c, h.webURL("/api/v1/auth/register/verify"), map[string]any{
+		"ceremonyId": ceremonyID,
+		"response":   map[string]any{"id": "cred-b"},
+		"envelopes": []map[string]any{{
+			"keyId": keyID, "hkdfSaltB64": "a2", "ivB64": "b2", "ciphertextB64": "c2",
+			"proof": k.proof(t, "some-other-credential", keyID, "a2", "b2", "c2"),
+		}},
+	}, nil)
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("want 403 for a proof bound to another credential, got %d", resp.StatusCode)
+	}
+	if _, err := store.GetCredential(ctx, h.server.db, cryptoutil.B64URL([]byte("cred-b"))); err == nil {
+		t.Fatal("credential must not be stored when the proof fails")
 	}
 }
 
@@ -312,13 +378,17 @@ func TestSealKeyThenState(t *testing.T) {
 	}
 	setCookie(t, c, h, sid)
 
+	k := newTestPGPKey(t)
+	keyID := rgaproto.KeyIDFromFingerprint(k.fpr)
 	resp, body := pwaPost(t, c, h.webURL("/api/v1/keys"), map[string]any{
-		"fingerprint":      fprForTest,
+		"credentialId":     "cred-a",
+		"fingerprint":      k.fpr,
 		"label":            "personal",
-		"publicKeyArmored": "-----BEGIN PGP PUBLIC KEY BLOCK-----\nx\n-----END PGP PUBLIC KEY BLOCK-----",
+		"publicKeyArmored": k.publicArmored,
 		"hkdfSaltB64":      "a",
 		"ivB64":            "b",
 		"ciphertextB64":    "c",
+		"proof":            k.proof(t, "cred-a", keyID, "a", "b", "c"),
 	}, nil)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("seal: %d %v", resp.StatusCode, body)
@@ -334,14 +404,91 @@ func TestSealKeyThenState(t *testing.T) {
 		t.Fatalf("credentialId: %v", state["credentialId"])
 	}
 
-	// 同じ fingerprint で別の公開鍵 → 409
+	// 同じ fingerprint を名乗る別の公開鍵は、所持証明が一致しないので保存されない。
+	other := newTestPGPKey(t)
 	resp, _ = pwaPost(t, c, h.webURL("/api/v1/keys"), map[string]any{
-		"fingerprint":      fprForTest,
-		"publicKeyArmored": "-----BEGIN PGP PUBLIC KEY BLOCK-----\ny\n-----END PGP PUBLIC KEY BLOCK-----",
+		"credentialId":     "cred-a",
+		"fingerprint":      k.fpr,
+		"publicKeyArmored": other.publicArmored,
 		"hkdfSaltB64":      "a", "ivB64": "b", "ciphertextB64": "c",
+		"proof": other.proof(t, "cred-a", keyID, "a", "b", "c"),
 	}, nil)
-	if resp.StatusCode != http.StatusConflict {
-		t.Fatalf("want 409, got %d", resp.StatusCode)
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("want 403 when the armor does not match the fingerprint, got %d", resp.StatusCode)
+	}
+}
+
+// 封印先の credential とセッションが食い違う要求は保存しない（マルチタブ対策）。
+func TestSealKeyRejectsCredentialMismatch(t *testing.T) {
+	h := newTestServer(t)
+	c := h.pwaClient(t)
+	sid, err := createSessionFor(t, h, "cred-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	setCookie(t, c, h, sid)
+
+	k := newTestPGPKey(t)
+	keyID := rgaproto.KeyIDFromFingerprint(k.fpr)
+	resp, _ := pwaPost(t, c, h.webURL("/api/v1/keys"), map[string]any{
+		"credentialId":     "cred-b",
+		"fingerprint":      k.fpr,
+		"publicKeyArmored": k.publicArmored,
+		"hkdfSaltB64":      "a", "ivB64": "b", "ciphertextB64": "c",
+		"proof": k.proof(t, "cred-b", keyID, "a", "b", "c"),
+	}, nil)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("want 400 for a mismatched credentialId, got %d", resp.StatusCode)
+	}
+	if _, err := store.GetKeyByFingerprint(t.Context(), h.server.db, k.fpr); err == nil {
+		t.Fatal("the key must not be stored")
+	}
+}
+
+// 秘密鍵を持たない credential は、公開鍵を知っていても envelope を名乗れない。
+func TestSealKeyRejectsEnvelopeWithoutPossession(t *testing.T) {
+	h := newTestServer(t)
+	victim := newTestPGPKey(t)
+	keyID := rgaproto.KeyIDFromFingerprint(victim.fpr)
+	ctx := t.Context()
+	if err := store.InsertCredential(ctx, h.server.db, store.CredentialRecord{
+		CredentialID: "cred-a", Label: "cred-a", PRFEnabled: true,
+		Record: webauthn.Credential{ID: []byte("cred-a"), PublicKey: []byte{1}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.UpsertKey(ctx, h.server.db, rgaproto.KeyMeta{
+		KeyID: keyID, Fingerprint: victim.fpr, Label: "personal", PublicKeyArmored: victim.publicArmored,
+	}, rgaproto.Envelope{
+		CredentialID: "cred-a", KeyID: keyID, HKDFSaltB64: "a", IVB64: "b", CiphertextB64: "c",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	sid, err := createSessionFor(t, h, "cred-b")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := h.pwaClient(t)
+	setCookie(t, c, h, sid)
+
+	attacker := newTestPGPKey(t)
+	resp, _ := pwaPost(t, c, h.webURL("/api/v1/keys"), map[string]any{
+		"credentialId":     "cred-b",
+		"fingerprint":      victim.fpr,
+		"publicKeyArmored": victim.publicArmored,
+		"hkdfSaltB64":      "a", "ivB64": "b", "ciphertextB64": "c",
+		"proof": attacker.proof(t, "cred-b", keyID, "a", "b", "c"),
+	}, nil)
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("want 403 without the private key, got %d", resp.StatusCode)
+	}
+	envs, err := storeEnvelopesFor(t, h, "cred-b")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(envs) != 0 {
+		t.Fatalf("cred-b must not get an envelope: %+v", envs)
 	}
 }
 

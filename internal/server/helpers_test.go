@@ -1,18 +1,23 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/hex"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/ProtonMail/go-crypto/openpgp"
+	"github.com/ProtonMail/go-crypto/openpgp/armor"
 	"github.com/go-webauthn/webauthn/webauthn"
 
 	"github.com/nananek/remote-gpg-agent/internal/protocol"
@@ -141,6 +146,59 @@ func (h *testStack) store() *store.Store { return h.server.db }
 
 // テストで共通に使う fingerprint（実在の鍵ではなく形式だけ正しい値）。
 const fprForTest = "0123456789ABCDEF0123456789ABCDEF01234567"
+
+// testPGPKey は envelope の所持証明を組み立てるための実鍵。
+type testPGPKey struct {
+	secretArmored string
+	publicArmored string
+	fpr           string
+}
+
+func newTestPGPKey(t *testing.T) testPGPKey {
+	t.Helper()
+	ent, err := openpgp.NewEntity("Test User", "", "test@example.com", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var priv, pub bytes.Buffer
+	privW, err := armor.Encode(&priv, openpgp.PrivateKeyType, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ent.SerializePrivate(privW, nil); err != nil {
+		t.Fatal(err)
+	}
+	privW.Close()
+	pubW, err := armor.Encode(&pub, openpgp.PublicKeyType, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ent.Serialize(pubW); err != nil {
+		t.Fatal(err)
+	}
+	pubW.Close()
+	return testPGPKey{
+		secretArmored: priv.String(),
+		publicArmored: pub.String(),
+		fpr:           strings.ToUpper(hex.EncodeToString(ent.PrimaryKey.Fingerprint[:])),
+	}
+}
+
+// proof は「この credential・この envelope をこの鍵で封印した」ことの署名を作る。
+func (k testPGPKey) proof(t *testing.T, credentialID, keyID, salt, iv, ciphertext string) string {
+	t.Helper()
+	el, err := openpgp.ReadArmoredKeyRing(strings.NewReader(k.secretArmored))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sig bytes.Buffer
+	if err := openpgp.ArmoredDetachSign(&sig, el[0], bytes.NewReader(
+		protocol.EnvelopeProofMessage(credentialID, keyID, salt, iv, ciphertext),
+	), nil); err != nil {
+		t.Fatal(err)
+	}
+	return sig.String()
+}
 
 func checkPending(h *testStack) ([]*store.Request, error) {
 	return store.ListPending(context.Background(), h.server.db)
