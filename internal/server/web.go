@@ -3,6 +3,7 @@ package server
 import (
 	"io/fs"
 	"net/http"
+	"strings"
 
 	"github.com/nananek/remote-gpg-agent/internal/store"
 	webdist "github.com/nananek/remote-gpg-agent/web"
@@ -36,11 +37,23 @@ func (s *Server) sessionCredential(r *http.Request) (string, error) {
 	return store.SessionCredential(r.Context(), s.db, c.Value)
 }
 
+func (s *Server) cookieSecure() bool {
+	return strings.HasPrefix(s.cfg.Origin, "https://")
+}
+
 func (s *Server) setSessionCookie(w http.ResponseWriter, id string) {
-	secure := len(s.cfg.Origin) >= 8 && s.cfg.Origin[:8] == "https://"
 	http.SetCookie(w, &http.Cookie{
 		Name: store.SessionCookie, Value: id, Path: "/",
-		HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: secure,
+		HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: s.cookieSecure(),
 		MaxAge: 7 * 24 * 3600,
+	})
+}
+
+// clearSessionCookie はログアウト時にセッションクッキーを失効させる。
+// 属性は setSessionCookie と揃える（Secure を含む）。
+func (s *Server) clearSessionCookie(w http.ResponseWriter) {
+	http.SetCookie(w, &http.Cookie{
+		Name: store.SessionCookie, Value: "", Path: "/", MaxAge: -1,
+		HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: s.cookieSecure(),
 	})
 }
