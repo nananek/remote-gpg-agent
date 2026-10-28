@@ -32,7 +32,7 @@ type Request struct {
 
 type NewRequestInput struct {
 	Purpose, Description, ClientName, KeyFingerprint, DataB64 string
-	TextMode                                                 bool
+	TextMode                                                  bool
 }
 
 func newID() string {

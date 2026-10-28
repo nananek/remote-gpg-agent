@@ -49,6 +49,20 @@ func New(cfg *Config, log *slog.Logger) (*Server, error) {
 
 func (s *Server) Close() error { return s.db.Close() }
 
+// DB はテストやデモが直接データを仕込むためのアクセサ。
+func (s *Server) DB() *store.Store { return s.db }
+
+// ListenAndServe は 2 つの listener を bind し、実際のアドレスを返してから serve する。
+// テストやデモから使う（Run はこれと serve をまとめただけ）。
+func (s *Server) ListenAndServe(ctx context.Context) (webAddr, clientAddr string, err error) {
+	webLn, clientLn, err := s.listeners()
+	if err != nil {
+		return "", "", err
+	}
+	go func() { _ = s.serve(ctx, webLn, clientLn) }()
+	return webLn.Addr().String(), clientLn.Addr().String(), nil
+}
+
 // Run は PWA 用（http）とクライアント用（mTLS）の 2 つの listener を同時に動かす。
 func (s *Server) Run(ctx context.Context) error {
 	webLn, clientLn, err := s.listeners()

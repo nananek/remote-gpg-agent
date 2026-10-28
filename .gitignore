@@ -20,3 +20,6 @@
 
 # container scratch
 /.probe
+
+# ローカルの作業メモ（マシン固有・設計メモはコミットしない）
+/.hermes/

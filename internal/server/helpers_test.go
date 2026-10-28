@@ -2,17 +2,10 @@ package server
 
 import (
 	"context"
-	"crypto/ecdsa"
-	"crypto/elliptic"
-	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
-	"crypto/x509/pkix"
-	"encoding/pem"
 	"io"
 	"log/slog"
-	"math/big"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -24,16 +17,17 @@ import (
 
 	"github.com/nananek/remote-gpg-agent/internal/protocol"
 	"github.com/nananek/remote-gpg-agent/internal/store"
+	"github.com/nananek/remote-gpg-agent/internal/testcert"
 )
 
 type testStack struct {
-	server    *Server
-	webAddr   string
+	server     *Server
+	webAddr    string
 	clientAddr string
-	caPath    string
+	caPath     string
 	clientCert string
 	clientKey  string
-	cfg       *Config
+	cfg        *Config
 }
 
 func silentLogger() *slog.Logger {
@@ -42,71 +36,11 @@ func silentLogger() *slog.Logger {
 
 func writeTestCerts(t *testing.T, dir string) (caPath, serverCert, serverKey, clientCert, clientKey string) {
 	t.Helper()
-	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	f, err := testcert.Write(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	caTmpl := &x509.Certificate{
-		SerialNumber:          big.NewInt(1),
-		Subject:               pkix.Name{CommonName: "rga test CA"},
-		NotBefore:             time.Now().Add(-time.Hour),
-		NotAfter:              time.Now().Add(24 * time.Hour),
-		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
-		BasicConstraintsValid: true,
-		IsCA:                  true,
-	}
-	caDER, err := x509.CreateCertificate(rand.Reader, caTmpl, caTmpl, &caKey.PublicKey, caKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-	caCert, err := x509.ParseCertificate(caDER)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	issue := func(cn string, usage x509.ExtKeyUsage, dns []string, ips []net.IP) (certPath, keyPath string) {
-		key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-		if err != nil {
-			t.Fatal(err)
-		}
-		tmpl := &x509.Certificate{
-			SerialNumber: big.NewInt(time.Now().UnixNano()),
-			Subject:      pkix.Name{CommonName: cn},
-			NotBefore:    time.Now().Add(-time.Hour),
-			NotAfter:     time.Now().Add(24 * time.Hour),
-			KeyUsage:     x509.KeyUsageDigitalSignature,
-			ExtKeyUsage:  []x509.ExtKeyUsage{usage},
-			DNSNames:     dns,
-			IPAddresses:  ips,
-		}
-		der, err := x509.CreateCertificate(rand.Reader, tmpl, caCert, &key.PublicKey, caKey)
-		if err != nil {
-			t.Fatal(err)
-		}
-		certPath = filepath.Join(dir, cn+"-cert.pem")
-		keyPath = filepath.Join(dir, cn+"-key.pem")
-		certOut, _ := os.Create(certPath)
-		_ = pem.Encode(certOut, &pem.Block{Type: "CERTIFICATE", Bytes: der})
-		certOut.Close()
-		keyDER, err := x509.MarshalECPrivateKey(key)
-		if err != nil {
-			t.Fatal(err)
-		}
-		keyOut, _ := os.Create(keyPath)
-		_ = pem.Encode(keyOut, &pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})
-		keyOut.Close()
-		return certPath, keyPath
-	}
-
-	caPath = filepath.Join(dir, "ca.pem")
-	caOut, _ := os.Create(caPath)
-	_ = pem.Encode(caOut, &pem.Block{Type: "CERTIFICATE", Bytes: caDER})
-	caOut.Close()
-
-	serverCert, serverKey = issue("localhost", x509.ExtKeyUsageServerAuth,
-		[]string{"localhost"}, []net.IP{net.ParseIP("127.0.0.1")})
-	clientCert, clientKey = issue("test-client", x509.ExtKeyUsageClientAuth, nil, nil)
-	return caPath, serverCert, serverKey, clientCert, clientKey
+	return f.CAPath, f.ServerCert, f.ServerKey, f.ClientCert, f.ClientKey
 }
 
 func newTestServer(t *testing.T) *testStack {
@@ -200,8 +134,8 @@ func (h *testStack) webClient() *http.Client {
 	return &http.Client{Timeout: 10 * time.Second}
 }
 
-func (h *testStack) clientURL(path string) string   { return "https://" + h.clientAddr + path }
-func (h *testStack) webURL(path string) string      { return "http://" + h.webAddr + path }
+func (h *testStack) clientURL(path string) string { return "https://" + h.clientAddr + path }
+func (h *testStack) webURL(path string) string    { return "http://" + h.webAddr + path }
 
 func (h *testStack) store() *store.Store { return h.server.db }
 

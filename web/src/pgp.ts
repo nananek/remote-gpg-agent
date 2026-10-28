@@ -12,6 +12,9 @@ export interface GeneratedKey {
  * v6 鍵は GnuPG 2.4 との相互運用が割れるため使わない。
  */
 export async function generateKey(label: string, name: string, email: string): Promise<GeneratedKey> {
+  if (!name.trim() || !email.trim()) {
+    throw new Error('名前とメールアドレスを入れてください（鍵の uid になります）');
+  }
   const { privateKey, publicKey, revocationCertificate } = await openpgp.generateKey({
     type: 'ecc',
     curve: 'curve25519Legacy',

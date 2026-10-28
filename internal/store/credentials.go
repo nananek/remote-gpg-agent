@@ -4,8 +4,8 @@ import (
 	"context"
 	"errors"
 
-	bolt "go.etcd.io/bbolt"
 	"github.com/go-webauthn/webauthn/webauthn"
+	bolt "go.etcd.io/bbolt"
 )
 
 type CredentialRecord struct {

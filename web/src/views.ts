@@ -42,9 +42,9 @@ export function renderSetup(params: {
       <label for="label">鍵のラベル</label>
       <input id="label" value="personal" autocomplete="off" />
       <label for="name">名前</label>
-      <input id="name" value="氏名" autocomplete="off" />
+      <input id="name" placeholder="氏名" autocomplete="off" />
       <label for="email">メールアドレス</label>
-      <input id="email" value="you@example.com" inputmode="email" autocomplete="off" />
+      <input id="email" placeholder="you@example.com" inputmode="email" autocomplete="off" />
       <button class="primary" type="submit">パスキーを作って鍵を生成</button>
       <p class="error" id="err"></p>
     </form>`;
@@ -168,9 +168,9 @@ export function renderSettings(params: {
       <label for="key-label">ラベル</label>
       <input id="key-label" value="arch-pkg" />
       <label for="key-name">名前</label>
-      <input id="key-name" value="氏名" />
+      <input id="key-name" placeholder="氏名" />
       <label for="key-email">メールアドレス</label>
-      <input id="key-email" value="you@example.com" />
+      <input id="key-email" placeholder="you@example.com" />
       <button id="add-key">新しい鍵を作る</button>
     </div>
     ${keyRows}

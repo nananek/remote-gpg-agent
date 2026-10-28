@@ -30,10 +30,10 @@ func (f *fakeWA) BeginRegistration(user webauthn.User, opts ...webauthn.Registra
 func (f *fakeWA) FinishRegistration(user webauthn.User, session webauthn.SessionData, r *http.Request) (*webauthn.Credential, error) {
 	enabled := f.prfEnabled
 	return &webauthn.Credential{
-		ID:          f.credentialID,
-		PublicKey:   []byte{0x01, 0x02, 0x03},
-		Transport:   []protocol.AuthenticatorTransport{protocol.Internal},
-		Extensions:  webauthn.CredentialExtensions{PRFEnabled: &enabled},
+		ID:            f.credentialID,
+		PublicKey:     []byte{0x01, 0x02, 0x03},
+		Transport:     []protocol.AuthenticatorTransport{protocol.Internal},
+		Extensions:    webauthn.CredentialExtensions{PRFEnabled: &enabled},
 		Authenticator: webauthn.Authenticator{SignCount: 1},
 	}, nil
 }

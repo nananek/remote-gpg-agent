@@ -9,23 +9,23 @@ import (
 )
 
 type Config struct {
-	DataDir      string
-	DBPath       string
-	WebAddr      string // PWA listener（既定 127.0.0.1:3080）
-	ClientAddr   string // mTLS listener（既定 0.0.0.0:8443）
-	Origin       string // https://<host>.<tailnet>.ts.net
-	RPID         string // <host>.<tailnet>.ts.net
-	RPName       string
-	TLSCert      string
-	TLSKey       string
-	TLSCA        string
+	DataDir        string
+	DBPath         string
+	WebAddr        string // PWA listener（既定 127.0.0.1:3080）
+	ClientAddr     string // mTLS listener（既定 0.0.0.0:8443）
+	Origin         string // https://<host>.<tailnet>.ts.net
+	RPID           string // <host>.<tailnet>.ts.net
+	RPName         string
+	TLSCert        string
+	TLSKey         string
+	TLSCA          string
 	BootstrapToken string
-	VAPIDSubject string
-	VAPIDPublic  string
-	VAPIDPrivate string
-	PollInterval time.Duration
-	PollDeadline time.Duration
-	RequestTTL   time.Duration
+	VAPIDSubject   string
+	VAPIDPublic    string
+	VAPIDPrivate   string
+	PollInterval   time.Duration
+	PollDeadline   time.Duration
+	RequestTTL     time.Duration
 }
 
 func Load() (*Config, error) {

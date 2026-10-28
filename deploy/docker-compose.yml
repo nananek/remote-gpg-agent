@@ -1,0 +1,49 @@
+name: remote-gpg-agent
+
+services:
+  tailscale:
+    image: tailscale/tailscale:stable
+    hostname: ${TS_HOSTNAME:?set TS_HOSTNAME in .env}
+    restart: unless-stopped
+    environment:
+      TS_AUTHKEY: ${TS_AUTHKEY:?set TS_AUTHKEY in .env}
+      TS_STATE_DIR: /var/lib/tailscale
+      TS_USERSPACE: "true"
+      TS_SERVE_CONFIG: /config/serve.json
+      TS_CERT_DOMAIN: ${TS_HOSTNAME}.${TS_TAILNET}
+    volumes:
+      - ts-state:/var/lib/tailscale
+      - ./tailscale:/config:ro
+    healthcheck:
+      test: ["CMD", "tailscale", "status", "--json"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  rga-server:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    image: remote-gpg-agent:local
+    restart: unless-stopped
+    # tailscale サイドカーとネットワーク名前空間を共有する（userspace モードなので
+    # tailnet からの着信は serve.json の 2 本が唯一の入口）。
+    network_mode: "service:tailscale"
+    depends_on:
+      tailscale:
+        condition: service_healthy
+    env_file: [./rga.env]
+    user: "65532:65532"
+    read_only: true
+    volumes:
+      - ./data:/data
+      - ./certs:/certs:ro
+    healthcheck:
+      # distroless には shell も curl も無いので、自分で /healthz を叩く
+      test: ["CMD", "/rga-server", "healthcheck"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  ts-state:

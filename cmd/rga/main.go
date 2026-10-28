@@ -10,9 +10,11 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -109,6 +111,10 @@ func main() {
 
 	case "gpg-compat":
 		inv := client.ParseGpgArgs(args)
+		// gpg.program には --verify なども飛んでくる。署名以外は本物の gpg に投げる。
+		if !inv.Detach {
+			os.Exit(delegateToRealGPG(args))
+		}
 		data, err := readInput(inv.File)
 		if err != nil {
 			fail(err)
@@ -189,6 +195,28 @@ func ensureNL(s string) string {
 		return s
 	}
 	return s + "\n"
+}
+
+// delegateToRealGPG は `gpg` と同じ引数・同じ標準入出力で本物の gpg を動かし、終了コードをそのまま返す。
+// これがないと `git log --show-signature`（gpg --verify）が壊れる。
+func delegateToRealGPG(args []string) int {
+	real := os.Getenv("REAL_GPG")
+	if real == "" {
+		real = "/usr/bin/gpg"
+	}
+	cmd := exec.Command(real, args...)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			return exitErr.ExitCode()
+		}
+		fmt.Fprintf(os.Stderr, "rga: %v\n", err)
+		return 1
+	}
+	return 0
 }
 
 func fail(err error) {
