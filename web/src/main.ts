@@ -129,10 +129,19 @@ function showSettings(): void {
 /** iOS の standalone PWA では a[download] が不安定なので、share を優先する。 */
 async function deliver(filename: string, text: string): Promise<void> {
   const file = new File([text], filename, { type: 'application/pgp-keys' });
-  const nav = navigator as Navigator & { canShare?: (d: unknown) => boolean };
-  if (nav.canShare?.({ files: [file] })) {
-    await nav.share({ files: [file], title: filename });
-    return;
+  const nav = navigator as Navigator & {
+    canShare?: (d: unknown) => boolean;
+    share?: (d: unknown) => Promise<void>;
+  };
+  // 共有シートが使えるなら優先する。ただしキャンセルや失敗で何も残らないのは困るので、
+  // 失敗したらダウンロードに落とす。
+  if (nav.canShare?.({ files: [file] }) && typeof nav.share === 'function') {
+    try {
+      await nav.share({ files: [file], title: filename });
+      return;
+    } catch {
+      /* ダウンロードへ */
+    }
   }
   const url = URL.createObjectURL(file);
   const a = document.createElement('a');
