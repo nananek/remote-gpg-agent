@@ -112,6 +112,8 @@ func CompleteRequest(_ context.Context, s *Store, id, sig string) (bool, error) 
 			return nil
 		}
 		r.Status, r.SignatureArmored = "signed", sig
+		// 署名が済んだら、サーバが平文の署名対象を持つ必要はない。
+		r.DataB64, r.Description = "", ""
 		ok = true
 		return putJSON(b, []byte(id), &r)
 	})
@@ -130,6 +132,7 @@ func DenyRequest(_ context.Context, s *Store, id, reason string) (bool, error) {
 			return nil
 		}
 		r.Status, r.DeniedReason = "denied", reason
+		r.DataB64, r.Description = "", ""
 		ok = true
 		return putJSON(b, []byte(id), &r)
 	})
@@ -147,6 +150,7 @@ func ExpireStale(_ context.Context, s *Store) error {
 			}
 			if r.Status == "pending" && r.ExpiresAt < now {
 				r.Status = "expired"
+				r.DataB64, r.Description = "", ""
 				return putJSON(b, key, &r)
 			}
 			return nil

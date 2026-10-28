@@ -9,6 +9,7 @@ import (
 
 	"github.com/SherClockHolmes/webpush-go"
 
+	"github.com/nananek/remote-gpg-agent/internal/protocol"
 	"github.com/nananek/remote-gpg-agent/internal/store"
 )
 
@@ -32,6 +33,10 @@ func (s *Server) notifyPush(row *store.Request) {
 	if err != nil {
 		return
 	}
+	keyID := protocol.KeyIDFromFingerprint(row.KeyFingerprint)
+	if keyID == "" {
+		return
+	}
 	payload, err := json.Marshal(map[string]string{
 		"title": "署名の承認待ち",
 		"body":  row.Description,
@@ -41,6 +46,12 @@ func (s *Server) notifyPush(row *store.Request) {
 		return
 	}
 	for _, sub := range subs {
+		// 解錠できない鍵の要求を、その credential の端末へ知らせない。
+		// 可視範囲は /api/v1/requests と同じ（envelope の有無）に揃える。
+		keys, err := store.KeyIDsForCredential(ctx, s.db, sub.CredentialID)
+		if err != nil || !keys[keyID] {
+			continue
+		}
 		code, err := sendPush(ctx, payload,
 			&webpush.Subscription{
 				Endpoint: sub.Endpoint,
