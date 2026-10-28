@@ -17,3 +17,6 @@
 # editor / OS
 .DS_Store
 *.swp
+
+# container scratch
+/.probe
