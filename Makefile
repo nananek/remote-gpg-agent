@@ -22,7 +22,7 @@ fmt:
 	$(GO_RUN) fmt ./...
 
 web:
-	cd web && npm ci && npm run build
+	cd web && NODE_ENV=development npm ci && npm run build
 
 vapid:
 	$(GO_RUN) run ./cmd/rga-server vapid
