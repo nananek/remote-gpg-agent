@@ -34,7 +34,7 @@ func clientName(r *http.Request) string {
 
 func (s *Server) handleCreateRequest(w http.ResponseWriter, r *http.Request) {
 	var in protocol.CreateSignRequest
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<20)).Decode(&in); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 512<<20)).Decode(&in); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid json")
 		return
 	}
@@ -55,6 +55,7 @@ func (s *Server) handleCreateRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	go s.notifyPush(row)
+	go s.notifyDiscord(row)
 	writeJSON(w, http.StatusCreated, protocol.CreateSignRequestResponse{ID: row.ID, ExpiresAt: row.ExpiresAt})
 }
 

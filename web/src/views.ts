@@ -126,14 +126,34 @@ export function renderApprove(params: {
   root().querySelector<HTMLButtonElement>('#settings')!.addEventListener('click', params.onSettings);
 }
 
+function permissionLabel(p: NotificationPermission | 'unsupported'): string {
+  switch (p) {
+    case 'granted':
+      return '許可済み';
+    case 'denied':
+      return '拒否（設定 → 通知 で変更）';
+    case 'default':
+      return '未許可';
+    default:
+      return '非対応';
+  }
+}
+
 export function renderSettings(params: {
   keys: UnlockedKey[];
   onBack: () => void;
   onAddPasskey: (label: string) => void;
   onAddKey: (v: { label: string; name: string; email: string }) => void;
+  onCopyPublicKey: (fingerprint: string) => void;
   onBackup: (fingerprint: string, passphrase: string) => void;
   onRestore: (armored: string, passphrase: string, label: string) => void;
   onSubscribePush: () => void;
+  onUnsubscribePush: () => void;
+  onTestPush: () => void;
+  onTestDiscord: () => void;
+  pushSubscribed: boolean;
+  pushPermission: NotificationPermission | 'unsupported';
+  discordEnabled: boolean;
   onLogout: () => void;
 }): void {
   const keyRows = params.keys
@@ -142,6 +162,7 @@ export function renderSettings(params: {
       <div class="card">
         <h2>${escapeHtml(k.label)}</h2>
         <p class="meta">${escapeHtml(k.fingerprint)}</p>
+        <button data-public="${k.fingerprint}">公開鍵をコピー</button>
         <label for="pass-${k.fingerprint}">バックアップのパスフレーズ</label>
         <input id="pass-${k.fingerprint}" type="password" autocomplete="new-password" />
         <button data-backup="${k.fingerprint}">パスフレーズ付き鍵を書き出す</button>
@@ -154,7 +175,13 @@ export function renderSettings(params: {
     <div class="card">
       <h2>通知</h2>
       <p class="meta">署名要求が来たら通知で知らせます。</p>
-      <button id="push">通知を有効にする</button>
+      <p class="meta">Web Push: ${params.pushSubscribed ? '有効' : '無効'} / ブラウザの許可: ${permissionLabel(params.pushPermission)}</p>
+      ${params.pushSubscribed
+        ? `<button class="quiet" id="push-off">通知を無効にする</button>
+           <button id="push-test">テスト通知を送る</button>`
+        : `<button id="push">通知を有効にする</button>`}
+      <p class="meta">Discord: ${params.discordEnabled ? '有効' : '未設定（サーバの RGA_DISCORD_WEBHOOK）'}</p>
+      ${params.discordEnabled ? '<button id="discord-test">Discord にテスト送信</button>' : ''}
     </div>
     <div class="card">
       <h2>パスキーを追加</h2>
@@ -194,7 +221,10 @@ export function renderSettings(params: {
   const val = (id: string): string => (document.querySelector('#' + id) as HTMLInputElement | null)?.value ?? '';
   const btn = (id: string): HTMLButtonElement => document.querySelector('#' + id) as HTMLButtonElement;
 
-  btn('push').addEventListener('click', params.onSubscribePush);
+  document.querySelector<HTMLButtonElement>('#push')?.addEventListener('click', params.onSubscribePush);
+  document.querySelector<HTMLButtonElement>('#push-off')?.addEventListener('click', params.onUnsubscribePush);
+  document.querySelector<HTMLButtonElement>('#push-test')?.addEventListener('click', params.onTestPush);
+  document.querySelector<HTMLButtonElement>('#discord-test')?.addEventListener('click', params.onTestDiscord);
   btn('add-passkey').addEventListener('click', () => params.onAddPasskey(val('passkey-label') || '予備のパスキー'));
   btn('add-key').addEventListener('click', () =>
     params.onAddKey({ label: val('key-label') || 'key2', name: val('key-name'), email: val('key-email') }));
@@ -204,4 +234,6 @@ export function renderSettings(params: {
   btn('logout').addEventListener('click', params.onLogout);
   root().querySelectorAll<HTMLButtonElement>('[data-backup]').forEach((b) =>
     b.addEventListener('click', () => params.onBackup(b.dataset.backup!, val('pass-' + b.dataset.backup))));
+  root().querySelectorAll<HTMLButtonElement>('[data-public]').forEach((b) =>
+    b.addEventListener('click', () => params.onCopyPublicKey(b.dataset.public!)));
 }

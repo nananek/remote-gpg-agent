@@ -23,6 +23,7 @@ type Config struct {
 	VAPIDSubject   string
 	VAPIDPublic    string
 	VAPIDPrivate   string
+	DiscordWebhook string // 任意。設定時は署名要求を Discord にも通知する
 	PollInterval   time.Duration
 	PollDeadline   time.Duration
 	RequestTTL     time.Duration
@@ -49,6 +50,7 @@ func Load() (*Config, error) {
 		VAPIDSubject:   get("RGA_VAPID_SUBJECT", "mailto:admin@example.com"),
 		VAPIDPublic:    os.Getenv("RGA_VAPID_PUBLIC"),
 		VAPIDPrivate:   os.Getenv("RGA_VAPID_PRIVATE"),
+		DiscordWebhook: os.Getenv("RGA_DISCORD_WEBHOOK"),
 		PollInterval:   time.Second,
 		PollDeadline:   50 * time.Second,
 		RequestTTL:     300 * time.Second,

@@ -2,7 +2,9 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -100,5 +102,114 @@ func TestNotifyPushDropsGoneSubscription(t *testing.T) {
 	subs, _ := store.ListPushSubscriptions(context.Background(), h.server.db)
 	if len(subs) != 0 {
 		t.Fatalf("gone subscription must be deleted: %+v", subs)
+	}
+}
+
+func TestPushStatusUnsubscribeAndTest(t *testing.T) {
+	h := newTestServer(t)
+	seedKey(t, h)
+	seedSubscription(t, h)
+	sid, err := createSessionFor(t, h, "cred-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := h.pwaClient(t)
+	setCookie(t, c, h, sid)
+
+	resp, body := pwaGet(t, c, h.webURL("/api/v1/push/status"))
+	if resp.StatusCode != http.StatusOK || body["webpush"] != true || body["discord"] != false {
+		t.Fatalf("status: %d %+v", resp.StatusCode, body)
+	}
+
+	called := 0
+	withSendPush(t, func(context.Context, []byte, *webpush.Subscription, *webpush.Options) (int, error) {
+		called++
+		return http.StatusCreated, nil
+	})
+	resp, body = pwaPost(t, c, h.webURL("/api/v1/push/test"), map[string]any{"channel": "webpush"}, nil)
+	if resp.StatusCode != http.StatusOK || body["sent"] != float64(1) || called != 1 {
+		t.Fatalf("test push: %d %+v called=%d", resp.StatusCode, body, called)
+	}
+
+	req, err := http.NewRequest(http.MethodDelete, h.webURL("/api/v1/push/subscribe"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp2, err := c.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp2.Body.Close()
+	if resp2.StatusCode != http.StatusOK {
+		t.Fatalf("unsubscribe: %d", resp2.StatusCode)
+	}
+
+	resp, body = pwaGet(t, c, h.webURL("/api/v1/push/status"))
+	if resp.StatusCode != http.StatusOK || body["webpush"] != false {
+		t.Fatalf("status after unsubscribe: %d %+v", resp.StatusCode, body)
+	}
+
+	resp, _ = pwaPost(t, c, h.webURL("/api/v1/push/test"), map[string]any{"channel": "webpush"}, nil)
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("test without subscription: %d", resp.StatusCode)
+	}
+}
+
+func TestPushTestRequiresSession(t *testing.T) {
+	h := newTestServer(t)
+	c := h.pwaClient(t)
+	resp, _ := pwaPost(t, c, h.webURL("/api/v1/push/test"), map[string]any{"channel": "discord"}, nil)
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("want 401, got %d", resp.StatusCode)
+	}
+}
+
+func TestNotifyDiscordPayload(t *testing.T) {
+	h := newTestServer(t)
+	h.server.cfg.DiscordWebhook = "https://discord.example/webhook"
+	var got []byte
+	orig := sendDiscord
+	sendDiscord = func(_ context.Context, webhook string, payload []byte) (int, error) {
+		if webhook != h.server.cfg.DiscordWebhook {
+			t.Fatalf("webhook: %s", webhook)
+		}
+		got = append([]byte(nil), payload...)
+		return http.StatusNoContent, nil
+	}
+	t.Cleanup(func() { sendDiscord = orig })
+
+	h.server.notifyDiscord(mustCreateRequest(t, h))
+	var msg map[string]any
+	if err := json.Unmarshal(got, &msg); err != nil {
+		t.Fatalf("payload: %v", err)
+	}
+	if msg["content"] != "署名の承認待ち" {
+		t.Fatalf("content: %v", msg["content"])
+	}
+	if strings.Contains(string(got), "@everyone") {
+		t.Fatal("payload must not ping")
+	}
+}
+
+func TestDiscordTestEndpoint(t *testing.T) {
+	h := newTestServer(t)
+	h.server.cfg.DiscordWebhook = "https://discord.example/webhook"
+	sid, err := createSessionFor(t, h, "cred-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := h.pwaClient(t)
+	setCookie(t, c, h, sid)
+	orig := sendDiscord
+	sendDiscord = func(context.Context, string, []byte) (int, error) { return http.StatusNoContent, nil }
+	t.Cleanup(func() { sendDiscord = orig })
+
+	resp, body := pwaGet(t, c, h.webURL("/api/v1/push/status"))
+	if resp.StatusCode != http.StatusOK || body["discord"] != true {
+		t.Fatalf("status: %d %+v", resp.StatusCode, body)
+	}
+	resp, body = pwaPost(t, c, h.webURL("/api/v1/push/test"), map[string]any{"channel": "discord"}, nil)
+	if resp.StatusCode != http.StatusOK || body["ok"] != true {
+		t.Fatalf("discord test: %d %+v", resp.StatusCode, body)
 	}
 }

@@ -107,6 +107,14 @@ func TestResolveFingerprint(t *testing.T) {
 	if err != nil || got != fpr {
 		t.Fatalf("short id: %q %v", got, err)
 	}
+	got, err = ResolveFingerprint(ft, fpr+"!", "")
+	if err != nil || got != fpr {
+		t.Fatalf("primary-key suffix: %q %v", got, err)
+	}
+	got, err = ResolveFingerprint(ft, "89ABCDEF01234567!", "")
+	if err != nil || got != fpr {
+		t.Fatalf("short id with primary-key suffix: %q %v", got, err)
+	}
 	got, err = ResolveFingerprint(ft, "", fpr)
 	if err != nil || got != fpr {
 		t.Fatalf("fallback: %q %v", got, err)

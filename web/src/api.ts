@@ -26,6 +26,11 @@ export interface VaultState {
   envelopes: EnvelopeMeta[];
 }
 
+export interface PushStatus {
+  webpush: boolean;
+  discord: boolean;
+}
+
 export interface PendingRequest {
   id: string;
   purpose: string;
@@ -114,4 +119,11 @@ export const api = {
 
   subscribe: (body: { endpoint: string; p256dh: string; auth: string }) =>
     call('POST', '/api/v1/push/subscribe', body),
+
+  unsubscribe: () => call<{ ok: boolean }>('DELETE', '/api/v1/push/subscribe'),
+
+  pushStatus: () => call<PushStatus>('GET', '/api/v1/push/status'),
+
+  testNotify: (channel: 'webpush' | 'discord') =>
+    call<{ sent?: number; ok?: boolean }>('POST', '/api/v1/push/test', { channel }),
 };

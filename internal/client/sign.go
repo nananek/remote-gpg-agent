@@ -81,7 +81,9 @@ func ResolveFingerprint(t Transport, ref, fallback string) (string, error) {
 	if ref == "" {
 		return "", fmt.Errorf("user.signingkey か config.defaultKeyFingerprint を設定してください")
 	}
-	ref = strings.ToUpper(strings.TrimSpace(ref))
+	// gpg の `--local-user FPR!` は「subkey を選ばず primary に固定」の
+	// 指示。rga は fingerprint から鍵を引くだけなので `!` は落とす。
+	ref = strings.TrimSuffix(strings.ToUpper(strings.TrimSpace(ref)), "!")
 	if len(ref) == 40 {
 		return ref, nil
 	}
