@@ -90,8 +90,23 @@ func TestRequestLifecycle(t *testing.T) {
 	if got.SignatureArmored != "SIG" {
 		t.Fatalf("signature: %s", got.SignatureArmored)
 	}
+	if got.DataB64 != "" || got.Description != "" {
+		t.Fatalf("payload must be cleared after signing: %+v", got)
+	}
 	if ok, _ := DenyRequest(ctx, s, r.ID, "no"); ok {
 		t.Fatal("deny must fail after signing")
+	}
+
+	denied, err := CreateRequest(ctx, s, baseInput(), time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := DenyRequest(ctx, s, denied.ID, "no"); err != nil || !ok {
+		t.Fatalf("deny: %v %v", ok, err)
+	}
+	gotDenied, _ := GetRequest(ctx, s, denied.ID)
+	if gotDenied.DataB64 != "" || gotDenied.Description != "" {
+		t.Fatalf("payload must be cleared after denial: %+v", gotDenied)
 	}
 }
 
@@ -120,6 +135,9 @@ func TestExpireStale(t *testing.T) {
 	got, _ := GetRequest(ctx, s, r.ID)
 	if got.Status != "expired" {
 		t.Fatalf("status: %s", got.Status)
+	}
+	if got.DataB64 != "" || got.Description != "" {
+		t.Fatalf("payload must be cleared after expiry: %+v", got)
 	}
 	pending, _ := ListPending(ctx, s)
 	if len(pending) != 0 {

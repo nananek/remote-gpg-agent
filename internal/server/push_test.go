@@ -41,6 +41,7 @@ func mustCreateRequest(t *testing.T, h *testStack) *store.Request {
 
 func TestNotifyPushSendsToLiveSubscription(t *testing.T) {
 	h := newTestServer(t)
+	seedKey(t, h)
 	seedSubscription(t, h)
 	called := 0
 	withSendPush(t, func(_ context.Context, payload []byte, sub *webpush.Subscription, o *webpush.Options) (int, error) {
@@ -64,8 +65,32 @@ func TestNotifyPushSendsToLiveSubscription(t *testing.T) {
 	}
 }
 
+func TestNotifyPushSkipsCredentialWithoutKey(t *testing.T) {
+	h := newTestServer(t)
+	seedKey(t, h)
+	for _, sub := range []store.PushSubscription{
+		{Endpoint: "https://push.example/owner", CredentialID: "cred-a", P256dh: "p", Auth: "a"},
+		{Endpoint: "https://push.example/other", CredentialID: "cred-b", P256dh: "p", Auth: "b"},
+	} {
+		if err := store.UpsertPushSubscription(context.Background(), h.server.db, sub); err != nil {
+			t.Fatal(err)
+		}
+	}
+	called := []string{}
+	withSendPush(t, func(_ context.Context, _ []byte, sub *webpush.Subscription, _ *webpush.Options) (int, error) {
+		called = append(called, sub.Endpoint)
+		return http.StatusCreated, nil
+	})
+
+	h.server.notifyPush(mustCreateRequest(t, h))
+	if len(called) != 1 || called[0] != "https://push.example/owner" {
+		t.Fatalf("push endpoints = %v, want only the key owner", called)
+	}
+}
+
 func TestNotifyPushDropsGoneSubscription(t *testing.T) {
 	h := newTestServer(t)
+	seedKey(t, h)
 	seedSubscription(t, h)
 	withSendPush(t, func(context.Context, []byte, *webpush.Subscription, *webpush.Options) (int, error) {
 		return http.StatusGone, nil

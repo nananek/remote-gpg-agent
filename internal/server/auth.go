@@ -343,8 +343,12 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 	if c, err := r.Cookie(store.SessionCookie); err == nil {
-		_ = store.DeleteSession(r.Context(), s.db, c.Value)
+		if credID, err := store.SessionCredential(ctx, s.db, c.Value); err == nil {
+			_ = store.DeletePushSubscriptionsForCredential(ctx, s.db, credID)
+		}
+		_ = store.DeleteSession(ctx, s.db, c.Value)
 	}
 	s.clearSessionCookie(w)
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})

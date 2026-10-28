@@ -40,3 +40,30 @@ func DeletePushSubscription(_ context.Context, s *Store, endpoint string) error 
 		return tx.Bucket(bPush).Delete([]byte(endpoint))
 	})
 }
+
+// DeletePushSubscriptionsForCredential はログアウトした credential の購読を消す。
+// セッションが無くなっても通知だけ届き続ける状態を残さない。
+func DeletePushSubscriptionsForCredential(_ context.Context, s *Store, credentialID string) error {
+	return s.Update(func(tx *bolt.Tx) error {
+		b := tx.Bucket(bPush)
+		var endpoints [][]byte
+		if err := forEach(b, func(key, raw []byte) error {
+			var sub PushSubscription
+			if err := jsonUnmarshal(raw, &sub); err != nil {
+				return err
+			}
+			if sub.CredentialID == credentialID {
+				endpoints = append(endpoints, append([]byte(nil), key...))
+			}
+			return nil
+		}); err != nil {
+			return err
+		}
+		for _, endpoint := range endpoints {
+			if err := b.Delete(endpoint); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}

@@ -80,6 +80,47 @@ func TestLogoutDeletesSession(t *testing.T) {
 	}
 }
 
+// TestLogoutDeletesPushSubscriptions はログアウト時に、その credential の
+// Push 購読だけを消すことを確かめる。
+func TestLogoutDeletesPushSubscriptions(t *testing.T) {
+	h := newTestServer(t)
+	sid, err := createSessionFor(t, h, "cred-logout")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	for _, sub := range []store.PushSubscription{
+		{Endpoint: "https://push.example/logout", CredentialID: "cred-logout", P256dh: "p", Auth: "a"},
+		{Endpoint: "https://push.example/keep", CredentialID: "cred-other", P256dh: "p", Auth: "b"},
+	} {
+		if err := store.UpsertPushSubscription(ctx, h.server.db, sub); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	req, err := http.NewRequest(http.MethodPost, h.webURL("/api/v1/auth/logout"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.AddCookie(&http.Cookie{Name: store.SessionCookie, Value: sid})
+	resp, err := h.webClient().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+
+	subs, err := store.ListPushSubscriptions(ctx, h.server.db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(subs) != 1 || subs[0].CredentialID != "cred-other" {
+		t.Fatalf("push subscriptions after logout: %+v", subs)
+	}
+}
+
 func findCookie(cookies []*http.Cookie, name string) *http.Cookie {
 	for _, c := range cookies {
 		if c.Name == name {
