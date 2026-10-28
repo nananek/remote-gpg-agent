@@ -1,0 +1,19 @@
+# build artifacts
+/bin/
+*.db
+*.db-wal
+*.db-shm
+
+# local deployment state
+/certs/
+/deploy/data/
+/deploy/certs/
+/deploy/.env
+/deploy/rga.env
+
+# node
+/web/node_modules/
+
+# editor / OS
+.DS_Store
+*.swp
