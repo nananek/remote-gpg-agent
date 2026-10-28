@@ -346,8 +346,6 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	if c, err := r.Cookie(store.SessionCookie); err == nil {
 		_ = store.DeleteSession(r.Context(), s.db, c.Value)
 	}
-	http.SetCookie(w, &http.Cookie{
-		Name: store.SessionCookie, Value: "", Path: "/", MaxAge: -1, HttpOnly: true,
-	})
+	s.clearSessionCookie(w)
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
