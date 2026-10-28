@@ -41,7 +41,7 @@ func RequestSignature(ctx context.Context, t Transport, in SignInput) (string, e
 	if len(short) > 8 {
 		short = short[:8]
 	}
-	fmt.Fprintf(os.Stderr, "rga: iPhone の承認待ちです（要求 %s）\n", short)
+	fmt.Fprintf(os.Stderr, "rga: PWA の承認待ちです（要求 %s）\n", short)
 
 	deadline := time.Now().Add(in.Timeout)
 	for {

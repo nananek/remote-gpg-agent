@@ -40,8 +40,13 @@ CI（`.github/workflows/image.yml`）が main への push と `v*` タグで
 # server: certs/server.pem (certs/server.key)
 ```
 
-`<client-name>` は端末ごとに分ける（`laptop`、`workstation` など）。失効させたいときは
-その端末の証明書だけ配り直せばよい。
+`<client-name>` は端末ごとに分ける（`laptop`、`workstation` など）。証明書は台数分発行でき、
+どれも同じサーバ・同じ vault につながる。クライアント証明書は端末の識別に使うだけで、
+署名できる鍵の範囲は証明書では制限しない。
+
+発行し直しても古い証明書は失効しない（サーバは CRL/OCSP を見ていない）。古い証明書は
+有効期限（825 日）まで通り続けるので、1 台だけ確実に切るには CA ごと作り直して
+`server.pem` と全クライアントの証明書を配り直す。端末を手放すときはこの点に注意する。
 
 ## 3. 配備先にファイルを置く
 
@@ -178,3 +183,7 @@ rga ping     # {"mode":"client","ok":true}
 
 `rga-server` は `network_mode: "service:tailscale"` でサイドカーとネットワークを共有しているので、
 tailnet からの入口はこの 2 本しかない。
+
+ACL はクライアント → サーバ方向だけ通せばよい（`rga client` は 8443、PWA は 443）。
+サーバからクライアントへ接続する処理はない（Web Push は Apple/Google 向けの外向き通信で、
+tailnet の ACL は通らない）。
