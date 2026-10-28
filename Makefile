@@ -10,6 +10,7 @@ GO_RUN = docker run --rm -e HOME=/tmp -e GOCACHE=/tmp/gocache \
 
 build:
 	$(GO_RUN) build -o bin/rga-server ./cmd/rga-server
+	$(GO_RUN) build -o bin/rga ./cmd/rga
 
 test:
 	$(GO_RUN) test ./...

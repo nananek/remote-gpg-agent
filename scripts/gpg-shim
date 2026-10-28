@@ -1,0 +1,11 @@
+#!/bin/sh
+# detach-sign だけ remote-gpg-agent に流し、それ以外は本物の gpg に委譲する。
+# makepkg は `gpg` を PATH から探すので、このファイルを `gpg` という名前で
+# PATH の先頭に置く（例: ~/.local/bin/gpg -> このスクリプト）。
+set -u
+REAL_GPG="${REAL_GPG:-/usr/bin/gpg}"
+case " $* " in
+  *" --detach-sign "*|*" -b "*|*" -bsau "*|*" -bsa "*|*" -bs "*|*" -sau "*)
+    exec rga gpg-compat "$@" ;;
+esac
+exec "$REAL_GPG" "$@"

@@ -1,0 +1,3 @@
+#!/bin/sh
+# git の gpg.program 用ラッパー。git は gpg と同じ引数を渡してくる。
+exec rga gpg-compat "$@"
