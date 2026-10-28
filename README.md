@@ -1,6 +1,6 @@
 # remote-gpg-agent
 
-iPhone の PWA から `git commit -S` / `makepkg --sign` を完了させるための署名基盤。
+PWA から `git commit -S` / `makepkg --sign` を完了させるための署名基盤。
 秘密鍵は PWA の中で生まれ、PWA の中だけで使われる。サーバは **passkey(PRF) で暗号化された
 バイト列を預かるだけ**で、平文の秘密鍵もパスフレーズも持たない。
 
@@ -8,18 +8,23 @@ iPhone の PWA から `git commit -S` / `makepkg --sign` を完了させるた�
 [git / makepkg]
       │ gpg 互換の引数
       ▼
-[rga client]  ── mTLS (8443) ──▶  [rga-server]  ◀── HTTPS ──  [iPhone PWA]
+[rga client × N] ── mTLS (8443) ──▶ [rga-server] ◀── HTTPS ── [PWA × N]
       │                                │  envelope の出し入れだけ        │ passkey で解錠
       │ 返ってきた署名を検証            │                              │ 署名はここで完結
       ▼                                ▼
 [gpg で GOODSIG]                    [bbolt]
 ```
 
+利用者は 1 人。1 台のサーバに、署名する端末（`rga client`）と承認する PWA を何台でもつなぐ。
+鍵束（vault）は 1 つで、クライアント証明書は端末の識別に使うだけ。どの鍵を署名できるかは
+承認するパスキーがその鍵を解錠できるかで決まり、クライアントごとに鍵を分ける仕組みはない
+（分けたいならサーバを分ける）。
+
 ## セキュリティモデル
 
 | 場所 | 持つもの | 持たないもの |
 | --- | --- | --- |
-| iPhone (PWA) | 秘密鍵（メモリ上）、パスキー | — |
+| PWA（各端末） | 秘密鍵（メモリ上）、パスキー | — |
 | rga-server | 暗号化済み envelope、公開鍵、パスキーの公開鍵 | 秘密鍵、パスフレーズ、PRF 出力 |
 | rga client | クライアント証明書、ピン留めした fingerprint | 秘密鍵 |
 
@@ -141,4 +146,7 @@ export PATH="$HOME/.local/bin:$PATH"
 - パスキーの PRF 拡張が必須（iOS 18+ / Safari、Chrome など）。非対応環境では登録できない。
 - 鍵は OpenPGP.js の `curve25519Legacy`（v4）。GnuPG 2.4 との相互運用を e2e で固定している。
 - サーバを落とすと署名できない。バックアップ `.asc` から gpg に戻す道は常に残す。
+- 利用者 1 人・vault 1 つが前提。クライアント証明書は台数分発行できるが、鍵は全クライアントで共有される。
+- クライアント証明書の失効は未対応（CRL/OCSP を見ていない）。古い証明書は期限まで有効なので、
+  1 台だけ確実に切るには CA ごと作り直してサーバ証明書と全クライアントを配り直す。
 - `web/dist/` は commit 済み。PWA を変えたら `make web` して一緒にコミットする。
