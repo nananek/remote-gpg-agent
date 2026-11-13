@@ -5,7 +5,10 @@ import (
 	"encoding/base64"
 	"fmt"
 	"os"
+	"strconv"
 	"time"
+
+	"github.com/nananek/remote-gpg-agent/internal/protocol"
 )
 
 type Config struct {
@@ -53,7 +56,12 @@ func Load() (*Config, error) {
 		DiscordWebhook: os.Getenv("RGA_DISCORD_WEBHOOK"),
 		PollInterval:   time.Second,
 		PollDeadline:   50 * time.Second,
-		RequestTTL:     300 * time.Second,
+		RequestTTL:     time.Duration(protocol.RequestTTLSec) * time.Second,
+	}
+	if v := os.Getenv("RGA_REQUEST_TTL_SEC"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			c.RequestTTL = time.Duration(n) * time.Second
+		}
 	}
 	c.DBPath = get("RGA_DB", c.DataDir+"/rga.db")
 	if c.Origin == "" || c.RPID == "" {

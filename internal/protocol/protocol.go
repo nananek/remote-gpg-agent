@@ -3,8 +3,10 @@ package protocol
 import "strings"
 
 const (
-	Version       = 1
-	RequestTTLSec = 300
+	Version = 1
+	// RequestTTLSec は署名要求の既定の寿命。PWA を開いて内容を確認し、
+	// パスキーで解錠するまでの時間を確保する（15 分）。
+	RequestTTLSec = 900
 )
 
 // MaxDataBytes は署名対象の上限。makepkg の .pkg.tar.zst (数十 MB) を
@@ -70,6 +72,13 @@ type State struct {
 	Credentials  []CredentialMeta `json:"credentials"`
 	Keys         []KeyMeta        `json:"keys"`
 	Envelopes    []Envelope       `json:"envelopes"`
+}
+
+// PendingRequestsResponse は PWA の承認待ち一覧。ServerNow は PWA の時計が
+// ずれていてもカウントダウンを正しく出すための基準時刻。
+type PendingRequestsResponse struct {
+	Requests  []PendingSignRequest `json:"requests"`
+	ServerNow string               `json:"serverNow"`
 }
 
 type PendingSignRequest struct {

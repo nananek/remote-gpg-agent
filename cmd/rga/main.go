@@ -98,7 +98,7 @@ func main() {
 			fail(err)
 		}
 		sig, err := client.RequestSignature(context.Background(), c, client.SignInput{
-			Purpose: "sign", Description: description(), Fingerprint: fpr,
+			Purpose: client.PurposeSign, Description: description(client.GpgInvocation{}), Fingerprint: fpr,
 			Data: data, Timeout: time.Duration(cfg.TimeoutSec) * time.Second,
 		})
 		if err != nil {
@@ -124,7 +124,7 @@ func main() {
 			fail(err)
 		}
 		sig, err := client.RequestSignature(context.Background(), c, client.SignInput{
-			Purpose: purposeFor(inv), Description: description(), Fingerprint: fpr,
+			Purpose: purposeFor(inv), Description: description(inv), Fingerprint: fpr,
 			Data: data, Timeout: time.Duration(cfg.TimeoutSec) * time.Second,
 		})
 		if err != nil {
@@ -156,22 +156,16 @@ func main() {
 	}
 }
 
-func description() string {
-	if d := os.Getenv("RGA_DESCRIPTION"); d != "" {
-		return d
-	}
+func description(inv client.GpgInvocation) string {
 	cwd, err := os.Getwd()
 	if err != nil {
-		return "rga"
+		cwd = ""
 	}
-	return cwd
+	return client.DescriptionFor(inv, cwd, os.Getenv("RGA_DESCRIPTION"))
 }
 
 func purposeFor(inv client.GpgInvocation) string {
-	if inv.File != "" && strings.HasSuffix(inv.File, ".zst") {
-		return "makepkg"
-	}
-	return "git-commit"
+	return client.ClassifyPurpose(inv, os.Getenv("RGA_PURPOSE"))
 }
 
 func readInput(path string) ([]byte, error) {

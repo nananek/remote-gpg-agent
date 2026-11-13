@@ -97,9 +97,13 @@ fixture を作り直すときは `cd web && node scripts/gen-openpgp-fixture.mjs
   "clientCert": "~/.config/remote-gpg-agent/client.pem",
   "clientKey": "~/.config/remote-gpg-agent/client.key",
   "defaultKeyFingerprint": "<40桁の fingerprint>",
-  "timeoutSec": 180
+  "timeoutSec": 900
 }
 ```
+
+`timeoutSec` は要求を出してから PWA の承認を待つ上限（既定 900 秒 = 15 分）。
+サーバ側の要求の寿命は `RGA_REQUEST_TTL_SEC`（既定 900 秒）で変えられる。
+PWA の承認画面には残り時間がドーナツで表示され、減るにつれて緑から赤に変わる。
 
 動作確認:
 
@@ -138,6 +142,8 @@ export PATH="$HOME/.local/bin:$PATH"
 2. 「パスキーを作って鍵を生成」— 名前とメールを入れる。これが鍵の uid になる。
 3. 表示されるバックアップ（パスフレーズ付き `.asc`）を保存する。
 4. 端末で `git commit -S` すると、PWA に承認待ちが出る。Face ID で解錠して署名。
+   `makepkg --sign` / `repo-add` の署名は「Arch パッケージ署名」「Arch リポジトリ DB 署名」として
+   別に表示され、git のコミットはメッセージ・作成者・tree をコミットらしい形で確認できる。
 5. 2 台目以降のパスキーは「パスキーを追加」から。いま解錠中のパスキーが開ける鍵が再封印される
    （他のパスキーでしか開けない鍵は引き継がれない）。
 

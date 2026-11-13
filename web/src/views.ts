@@ -1,4 +1,14 @@
 import type { PendingRequest } from './api';
+import { countdownState, donutOffset, DONUT_CIRCUMFERENCE } from './countdown';
+import {
+  decodePrefix,
+  hexPreview,
+  isPackagePurpose,
+  parseCommitObject,
+  purposeTitle,
+  sanitizeText,
+  type CommitIdentity,
+} from './preview';
 import type { UnlockedKey } from './state';
 
 export function root(): HTMLElement {
@@ -71,37 +81,146 @@ export function renderUnlock(params: { onUnlock: () => void; credentialCount: nu
   root().querySelector<HTMLButtonElement>('#unlock')!.addEventListener('click', params.onUnlock);
 }
 
-function previewOf(r: PendingRequest): string {
-  try {
-    // 大きな package でも全 base64 をデコードしない。先頭 800 文字だけ
-    // (4 の倍数に丸める) を atob し、600 バイトを表示する。
-    const chunk = r.dataB64.slice(0, 800);
-    const text = atob(chunk.slice(0, chunk.length - (chunk.length % 4))).slice(0, 600);
-    return text.replace(/[^\t\n\x20-\x7e]/g, '.');
-  } catch {
-    return '(preview unavailable)';
+function formatBytes(n: number): string {
+  if (!Number.isFinite(n) || n < 1024) return `${n || 0} バイト`;
+  const units = ['KB', 'MB', 'GB'];
+  let v = n / 1024;
+  let i = 0;
+  while (v >= 1024 && i < units.length - 1) {
+    v /= 1024;
+    i++;
   }
+  return `${v.toFixed(v >= 10 ? 0 : 1)} ${units[i]}`;
+}
+
+function sameIdentity(a?: CommitIdentity, b?: CommitIdentity): boolean {
+  return !!a && !!b && a.name === b.name && a.email === b.email && a.date === b.date;
+}
+
+function renderCommit(r: PendingRequest): string | null {
+  const { text, truncated } = decodePrefix(r.dataB64, 128 * 1024);
+  const c = parseCommitObject(text);
+  if (!c) return null;
+
+  const ids = [`tree ${escapeHtml(c.tree.slice(0, 8))}`];
+  if (c.parents.length > 0) {
+    ids.push(`parent ${c.parents.map((p) => escapeHtml(p.slice(0, 8))).join(', ')}`);
+  }
+  const author = c.author
+    ? `<div><dt>作成者</dt><dd>${escapeHtml(c.author.name)} &lt;${escapeHtml(c.author.email)}&gt; · ${escapeHtml(c.author.date)}</dd></div>`
+    : '';
+  // 作成者とコミッターが同じ（rebase / amend していない普通のコミット）なら繰り返さない。
+  const committer = c.committer && !sameIdentity(c.author, c.committer)
+    ? `<div><dt>コミット</dt><dd>${escapeHtml(c.committer.name)} &lt;${escapeHtml(c.committer.email)}&gt; · ${escapeHtml(c.committer.date)}</dd></div>`
+    : '';
+
+  return `
+    <div class="commit">
+      <p class="commit-subject">${escapeHtml(c.subject || '(メッセージなし)')}</p>
+      ${c.body ? `<pre class="commit-message">${escapeHtml(c.body)}</pre>` : ''}
+      <dl class="commit-meta">
+        ${author}
+        ${committer}
+        <div><dt>オブジェクト</dt><dd>${ids.join(' · ')}</dd></div>
+      </dl>
+      ${truncated ? '<p class="meta">（長いコミットのため先頭のみ表示）</p>' : ''}
+    </div>`;
+}
+
+function renderPackage(r: PendingRequest): string {
+  const hex = hexPreview(r.dataB64, 32);
+  return `
+    <div class="archive">
+      <p class="archive-file">${escapeHtml(r.description)}</p>
+      <p class="meta">${formatBytes(r.dataSize)} のバイナリ全体に分離署名を付けます。</p>
+      ${hex ? `<pre class="preview hex">${escapeHtml(hex)} …</pre>` : ''}
+    </div>`;
+}
+
+function renderBody(r: PendingRequest): string {
+  if (r.purpose === 'git-commit') {
+    const commit = renderCommit(r);
+    if (commit) return commit;
+  }
+  if (isPackagePurpose(r.purpose)) return renderPackage(r);
+
+  const { text, truncated } = decodePrefix(r.dataB64, 4096);
+  return `<pre class="preview">${escapeHtml(sanitizeText(text))}${truncated ? '\n…（以下省略）' : ''}</pre>`;
+}
+
+let clockOffsetMs = 0;
+let countdownTimer: number | undefined;
+
+function updateCountdowns(): void {
+  const now = Date.now() + clockOffsetMs;
+  document.querySelectorAll<HTMLElement>('[data-expires]').forEach((el) => {
+    const state = countdownState(el.dataset.created ?? '', el.dataset.expires ?? '', now);
+    const label = el.querySelector<HTMLElement>('.countdown-label');
+    if (label) label.textContent = state.label;
+    const ring = el.querySelector<SVGCircleElement>('.donut-value');
+    if (ring) {
+      ring.style.strokeDasharray = `${DONUT_CIRCUMFERENCE} ${DONUT_CIRCUMFERENCE}`;
+      ring.style.strokeDashoffset = String(donutOffset(state.fraction));
+      ring.style.stroke = state.color;
+    }
+    el.classList.toggle('is-expired', state.expired);
+
+    const button = el.closest('article')?.querySelector<HTMLButtonElement>('[data-sign]');
+    if (state.expired && button && !button.disabled) {
+      button.disabled = true;
+      button.textContent = '期限切れ';
+    }
+  });
+}
+
+function startCountdowns(): void {
+  if (typeof window === 'undefined' || countdownTimer !== undefined) return;
+  countdownTimer = window.setInterval(updateCountdowns, 1000);
+}
+
+function countdownHtml(r: PendingRequest): string {
+  return `
+    <div class="countdown" data-created="${escapeHtml(r.createdAt)}" data-expires="${escapeHtml(r.expiresAt)}" role="timer">
+      <svg class="donut" viewBox="0 0 44 44" width="44" height="44" aria-hidden="true">
+        <circle class="donut-track" cx="22" cy="22" r="18"></circle>
+        <circle class="donut-value" cx="22" cy="22" r="18"></circle>
+      </svg>
+      <span class="countdown-label">残り --:--</span>
+    </div>`;
 }
 
 export function renderApprove(params: {
   requests: PendingRequest[];
+  serverNow?: string;
   keys: UnlockedKey[];
   onSign: (request: PendingRequest) => void;
   onDeny: (request: PendingRequest) => void;
   onSettings: () => void;
 }): void {
+  const serverTime = params.serverNow ? Date.parse(params.serverNow) : NaN;
+  clockOffsetMs = Number.isFinite(serverTime) ? serverTime - Date.now() : 0;
+  const now = Date.now() + clockOffsetMs;
+
   const cards = params.requests
     .map((r) => {
       const key = params.keys.find((k) => k.fingerprint === r.keyFingerprint.toUpperCase());
       const keyLabel = key ? key.label : 'この端末では未解錠';
+      const remaining = countdownState(r.createdAt, r.expiresAt, now);
+      const disabled = !key || remaining.expired;
       return `
-      <article class="card">
-        <h2>${escapeHtml(r.purpose)} · ${escapeHtml(r.clientName)}</h2>
-        <p class="meta">${escapeHtml(keyLabel)} · ${r.dataSize} バイト · sha256 ${r.dataSha256.slice(0, 16)}…</p>
-        <p class="meta">${escapeHtml(r.description)}</p>
-        <pre class="preview">${escapeHtml(previewOf(r))}</pre>
+      <article class="card request">
+        <div class="request-head">
+          <div class="request-title">
+            <h2>${escapeHtml(purposeTitle(r.purpose))}</h2>
+            <p class="meta">${escapeHtml(r.clientName)}</p>
+          </div>
+          ${countdownHtml(r)}
+        </div>
+        <p class="meta">${escapeHtml(keyLabel)} · ${formatBytes(r.dataSize)} · sha256 ${escapeHtml(r.dataSha256.slice(0, 16))}…</p>
+        <p class="meta request-desc">${escapeHtml(r.description)}</p>
+        ${renderBody(r)}
         <div class="row">
-          <button class="primary" data-sign="${r.id}" ${key ? '' : 'disabled'}>署名する</button>
+          <button class="primary" data-sign="${r.id}" ${disabled ? 'disabled' : ''}>${remaining.expired ? '期限切れ' : '署名する'}</button>
           <button class="quiet" data-deny="${r.id}">拒否</button>
         </div>
       </article>`;
@@ -110,7 +229,7 @@ export function renderApprove(params: {
 
   root().innerHTML = `
     ${header(params.requests.length ? `承認待ち ${params.requests.length} 件` : '承認待ちはありません')}
-    ${cards || '<p class="lead">端末でコミットすると、ここに署名要求が出ます。</p>'}
+    ${cards || '<p class="lead">端末で git commit -S や makepkg --sign を実行すると、ここに署名要求が出ます。</p>'}
     <p class="error" id="err"></p>
     <div class="card">
       <button id="settings">設定</button>
@@ -127,6 +246,9 @@ export function renderApprove(params: {
       if (r) params.onDeny(r);
     }));
   root().querySelector<HTMLButtonElement>('#settings')!.addEventListener('click', params.onSettings);
+
+  updateCountdowns();
+  startCountdowns();
 }
 
 function permissionLabel(p: NotificationPermission | 'unsupported'): string {

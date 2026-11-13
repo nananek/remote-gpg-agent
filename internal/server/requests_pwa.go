@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"net/http"
+	"time"
 
 	"github.com/nananek/remote-gpg-agent/internal/protocol"
 	"github.com/nananek/remote-gpg-agent/internal/store"
@@ -56,7 +57,10 @@ func (s *Server) handlePendingRequests(w http.ResponseWriter, r *http.Request) {
 			DataB64: row.DataB64, TextMode: row.TextMode, CreatedAt: row.CreatedAt, ExpiresAt: row.ExpiresAt,
 		})
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"requests": out})
+	writeJSON(w, http.StatusOK, protocol.PendingRequestsResponse{
+		Requests:  out,
+		ServerNow: time.Now().UTC().Format(time.RFC3339),
+	})
 }
 
 func (s *Server) handleSign(w http.ResponseWriter, r *http.Request) {
