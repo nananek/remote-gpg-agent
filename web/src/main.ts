@@ -13,9 +13,19 @@ import {
   setError,
 } from './views';
 import { pushPermission, subscribePush, testPush, unsubscribePush } from './push';
+import { playRequestChime, primeSound, setSoundEnabled, soundEnabled } from './sound';
 
 let polling = 0;
 let renderedKey = '';
+
+/** 直前に描画した要求 ID。解錠直後の一覧（null）では鳴らさない。 */
+let knownRequestIds: Set<string> | null = null;
+
+function announceArrivals(requests: PendingRequest[]): void {
+  const previous = knownRequestIds;
+  knownRequestIds = new Set(requests.map((r) => r.id));
+  if (previous && requests.some((r) => !previous.has(r.id))) playRequestChime();
+}
 
 function stopPolling(): void {
   if (polling) {
@@ -43,6 +53,7 @@ async function refresh(force = true): Promise<void> {
   if (!state.unlocked) return;
   try {
     const { requests, serverNow } = await api.pending();
+    announceArrivals(requests);
     const key = requestsKey(requests);
     if (!force && key === renderedKey) return;
     renderedKey = key;
@@ -167,6 +178,14 @@ async function showSettings(): Promise<void> {
         .then((msg) => setError(msg))
         .catch((err: unknown) => setError((err as Error).message));
     },
+    soundEnabled: soundEnabled(),
+    onToggleSound: () => {
+      const next = !soundEnabled();
+      setSoundEnabled(next);
+      // 有効にしたときは、その場で確認できるよう 1 回鳴らす。
+      if (next) playRequestChime();
+      void showSettings();
+    },
     onLogout: () => {
       void api.logout().finally(() => {
         state.clear();
@@ -245,6 +264,10 @@ async function unlockNow(): Promise<void> {
     setError((err as Error).message);
   }
 }
+
+// AudioContext はユーザー操作の中でしか開始できない（iOS）。最初の操作で用意しておく。
+document.addEventListener('pointerdown', primeSound, { capture: true, passive: true, once: true });
+document.addEventListener('keydown', primeSound, { capture: true, once: true });
 
 document.addEventListener('visibilitychange', () => {
   if (!document.hidden && state.unlocked) void refresh();

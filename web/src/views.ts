@@ -279,6 +279,8 @@ export function renderSettings(params: {
   pushSubscribed: boolean;
   pushPermission: NotificationPermission | 'unsupported';
   discordEnabled: boolean;
+  soundEnabled: boolean;
+  onToggleSound: () => void;
   onLogout: () => void;
 }): void {
   const keyRows = params.keys
@@ -307,6 +309,11 @@ export function renderSettings(params: {
         : `<button id="push">通知を有効にする</button>`}
       <p class="meta">Discord: ${params.discordEnabled ? '有効' : '未設定（サーバの RGA_DISCORD_WEBHOOK）'}</p>
       ${params.discordEnabled ? '<button id="discord-test">Discord にテスト送信</button>' : ''}
+    </div>
+    <div class="card">
+      <h2>効果音</h2>
+      <p class="meta">署名要求が来たときに短いチャイムを鳴らします。</p>
+      <button id="sound-toggle">${params.soundEnabled ? '効果音を無効にする' : '効果音を有効にする'}</button>
     </div>
     <div class="card">
       <h2>パスキーを追加</h2>
@@ -350,6 +357,7 @@ export function renderSettings(params: {
   document.querySelector<HTMLButtonElement>('#push-off')?.addEventListener('click', params.onUnsubscribePush);
   document.querySelector<HTMLButtonElement>('#push-test')?.addEventListener('click', params.onTestPush);
   document.querySelector<HTMLButtonElement>('#discord-test')?.addEventListener('click', params.onTestDiscord);
+  document.querySelector<HTMLButtonElement>('#sound-toggle')?.addEventListener('click', params.onToggleSound);
   btn('add-passkey').addEventListener('click', () => params.onAddPasskey(val('passkey-label') || '予備のパスキー'));
   btn('add-key').addEventListener('click', () =>
     params.onAddKey({ label: val('key-label') || 'key2', name: val('key-name'), email: val('key-email') }));
