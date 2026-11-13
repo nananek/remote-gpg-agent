@@ -143,13 +143,23 @@ func main() {
 		if outPath == "" && inv.File != "" {
 			outPath = inv.File + ".sig"
 		}
+		out := []byte(ensureNL(sig))
+		if !inv.Armor {
+			// makepkg は `--no-armor` を渡してくる。pacman は armored の .sig を
+			// 拒否するので、gpg と同じくバイナリで書く。
+			raw, err := pgpverify.Dearmor(sig)
+			if err != nil {
+				fail(err)
+			}
+			out = raw
+		}
 		if outPath != "" {
-			if err := os.WriteFile(outPath, []byte(ensureNL(sig)), 0o644); err != nil {
+			if err := os.WriteFile(outPath, out, 0o644); err != nil {
 				fail(err)
 			}
 			return
 		}
-		fmt.Print(ensureNL(sig))
+		_, _ = os.Stdout.Write(out)
 
 	default:
 		usage()
