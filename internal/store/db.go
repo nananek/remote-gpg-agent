@@ -37,7 +37,8 @@ func Open(path string) (*Store, error) {
 				return err
 			}
 		}
-		return nil
+		// 落ちたまま残った期限切れチャレンジを起動時にも掃除する。
+		return pruneExpiredChallenges(tx, time.Now().UTC())
 	}); err != nil {
 		db.Close()
 		return nil, err

@@ -45,6 +45,12 @@ export interface PendingRequest {
   expiresAt: string;
 }
 
+export interface PendingResponse {
+  requests: PendingRequest[];
+  /** サーバの現在時刻。端末の時計ずれを補正してカウントダウンを出すのに使う。 */
+  serverNow: string;
+}
+
 async function call<T>(method: string, path: string, body?: unknown, headers?: Record<string, string>): Promise<T> {
   const res = await fetch(path, {
     method,
@@ -108,7 +114,7 @@ export const api = {
     proof: string;
   }) => call<{ keyId: string }>('POST', '/api/v1/keys', body),
 
-  pending: () => call<{ requests: PendingRequest[] }>('GET', '/api/v1/requests?status=pending'),
+  pending: () => call<PendingResponse>('GET', '/api/v1/requests?status=pending'),
 
   sign: (id: string, signatureArmored: string) =>
     call('POST', `/api/v1/requests/${id}/sign`, { signatureArmored }),

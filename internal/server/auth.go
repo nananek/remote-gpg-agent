@@ -66,6 +66,12 @@ func (s *Server) handleRegisterOptions(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "session required")
 		return
 	}
+	// 認証を通った要求だけ回数を数える。未認証の連打で
+	// 正規のログインまで巻き込まないため。
+	if s.registerLimiter != nil && !s.registerLimiter.allow(time.Now()) {
+		writeError(w, http.StatusTooManyRequests, "too many authentication attempts; retry later")
+		return
+	}
 
 	u, err := s.loadUser(ctx)
 	if err != nil {
@@ -231,6 +237,10 @@ func (s *Server) handleRegisterVerify(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleLoginOptions(w http.ResponseWriter, r *http.Request) {
+	if s.loginLimiter != nil && !s.loginLimiter.allow(time.Now()) {
+		writeError(w, http.StatusTooManyRequests, "too many authentication attempts; retry later")
+		return
+	}
 	ctx := r.Context()
 	recs, err := store.ListCredentials(ctx, s.db)
 	if err != nil {

@@ -46,8 +46,9 @@ func parseConfig(raw []byte) (*Config, error) {
 	if c.DefaultKeyFingerprint != "" && len(c.DefaultKeyFingerprint) != 40 {
 		return nil, errors.New("config.defaultKeyFingerprint must be 40 hex chars")
 	}
+	// サーバ側の要求 TTL と同じ 15 分。PWA で内容を読んでから承認できる。
 	if c.TimeoutSec <= 0 {
-		c.TimeoutSec = 180
+		c.TimeoutSec = 900
 	}
 	c.CACert, c.ClientCert, c.ClientKey = expandHome(c.CACert), expandHome(c.ClientCert), expandHome(c.ClientKey)
 	c.DefaultKeyFingerprint = strings.ToUpper(c.DefaultKeyFingerprint)

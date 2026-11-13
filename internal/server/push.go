@@ -49,6 +49,18 @@ func (s *Server) pushOptions() *webpush.Options {
 		VAPIDPublicKey:  s.vapid.public,
 		VAPIDPrivateKey: s.vapid.private,
 		TTL:             300,
+		// Web Push の endpoint はユーザー入力なので、接続時に private /
+		// loopback / link-local を拒否する。DNS rebinding も DialContext で防ぐ。
+		HTTPClient: &http.Client{
+			Timeout: 15 * time.Second,
+			Transport: &http.Transport{
+				Proxy:                 nil,
+				DialContext:           safeDialContext,
+				ForceAttemptHTTP2:     true,
+				TLSHandshakeTimeout:   10 * time.Second,
+				ResponseHeaderTimeout: 10 * time.Second,
+			},
+		},
 	}
 }
 
@@ -151,8 +163,12 @@ func (s *Server) handleSubscribe(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid json")
 		return
 	}
-	if !strings.HasPrefix(in.Endpoint, "https://") || in.P256dh == "" || in.Auth == "" {
+	if in.Endpoint == "" || in.P256dh == "" || in.Auth == "" {
 		writeError(w, http.StatusBadRequest, "endpoint, p256dh and auth are required")
+		return
+	}
+	if err := validatePushEndpoint(r.Context(), in.Endpoint); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	if err := store.UpsertPushSubscription(r.Context(), s.db, store.PushSubscription{

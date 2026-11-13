@@ -37,6 +37,13 @@ services:
     env_file: [./rga.env]
     user: "65532:65532"
     read_only: true
+    # distroless nonroot + read-only に加えて、昇格・追加 capability を塞ぐ。
+    # これはコンテナの防御強化であって、一般の「サンドボックス」ではない。
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 256
     volumes:
       - ./data:/data
       - ./certs:/certs:ro

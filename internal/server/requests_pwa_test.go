@@ -39,6 +39,27 @@ func TestSignExpiredRequestIsRejected(t *testing.T) {
 	}
 }
 
+func TestPendingRequestsIncludeServerTime(t *testing.T) {
+	h := newTestServer(t)
+	seedKey(t, h)
+	sid, err := createSessionFor(t, h, "cred-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := h.pwaClient(t)
+	setCookie(t, c, h, sid)
+	createRequestFor(t, h)
+
+	_, body := pwaGet(t, c, h.webURL("/api/v1/requests"))
+	raw, ok := body["serverNow"].(string)
+	if !ok || raw == "" {
+		t.Fatalf("serverNow is missing: %v", body)
+	}
+	if _, err := time.Parse(time.RFC3339, raw); err != nil {
+		t.Fatalf("serverNow is not RFC3339: %q (%v)", raw, err)
+	}
+}
+
 func TestAPIResponsesAreNotCacheable(t *testing.T) {
 	h := newTestServer(t)
 	seedKey(t, h)

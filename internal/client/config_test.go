@@ -11,7 +11,7 @@ func TestParseConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.TimeoutSec != 180 {
+	if c.TimeoutSec != 900 {
 		t.Fatalf("default timeout: %d", c.TimeoutSec)
 	}
 

@@ -15,6 +15,7 @@ import {
 import { pushPermission, subscribePush, testPush, unsubscribePush } from './push';
 
 let polling = 0;
+let renderedKey = '';
 
 function stopPolling(): void {
   if (polling) {
@@ -26,16 +27,28 @@ function stopPolling(): void {
 function startPolling(): void {
   stopPolling();
   polling = window.setInterval(() => {
-    if (!document.hidden && state.unlocked) void refresh();
+    if (!document.hidden && state.unlocked) void refresh(false);
   }, 3000);
 }
 
-async function refresh(): Promise<void> {
+/** 同じ内容の再描画でカウントダウンやスクロールを壊さないための比較キー。 */
+function requestsKey(requests: PendingRequest[]): string {
+  return JSON.stringify({
+    requests: requests.map((r) => [r.id, r.expiresAt, r.dataSha256]),
+    keys: state.keys.map((k) => [k.fingerprint, k.label]),
+  });
+}
+
+async function refresh(force = true): Promise<void> {
   if (!state.unlocked) return;
   try {
-    const { requests } = await api.pending();
+    const { requests, serverNow } = await api.pending();
+    const key = requestsKey(requests);
+    if (!force && key === renderedKey) return;
+    renderedKey = key;
     renderApprove({
       requests,
+      serverNow,
       keys: state.keys,
       onSign: (r) => void sign(r),
       onDeny: (r) => void deny(r),
