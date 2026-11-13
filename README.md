@@ -171,3 +171,9 @@ RGA_DISCORD_WEBHOOK=https://discord.com/api/webhooks/...
 - クライアント証明書の失効は未対応（CRL/OCSP を見ていない）。古い証明書は期限まで有効なので、
   1 台だけ確実に切るには CA ごと作り直してサーバ証明書と全クライアントを配り直す。
 - `web/dist/` は commit 済み。PWA を変えたら `make web` して一緒にコミットする。
+
+## ライセンス
+
+オリジナルコードは [MIT License](LICENSE)。`web/dist` には OpenPGP.js 6.3.2
+（LGPL-3.0-or-later）がバンドルされている。LGPL 対象部分の扱いと再ビルド方法は
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) を参照。
