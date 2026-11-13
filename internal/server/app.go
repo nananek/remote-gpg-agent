@@ -17,11 +17,13 @@ import (
 )
 
 type Server struct {
-	cfg   *Config
-	db    *store.Store
-	wa    webAuthnAPI
-	log   *slog.Logger
-	vapid vapidKeys
+	cfg             *Config
+	db              *store.Store
+	wa              webAuthnAPI
+	log             *slog.Logger
+	vapid           vapidKeys
+	loginLimiter    *tokenBucket
+	registerLimiter *tokenBucket
 }
 
 func New(cfg *Config, log *slog.Logger) (*Server, error) {
@@ -43,7 +45,9 @@ func New(cfg *Config, log *slog.Logger) (*Server, error) {
 	}
 	return &Server{
 		cfg: cfg, db: db, wa: wa, log: log,
-		vapid: vapidKeys{subject: cfg.VAPIDSubject, public: cfg.VAPIDPublic, private: cfg.VAPIDPrivate},
+		vapid:           vapidKeys{subject: cfg.VAPIDSubject, public: cfg.VAPIDPublic, private: cfg.VAPIDPrivate},
+		loginLimiter:    newTokenBucket(60, 60),
+		registerLimiter: newTokenBucket(30, 30),
 	}, nil
 }
 
