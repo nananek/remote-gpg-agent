@@ -55,6 +55,11 @@ func TestParseGpgArgs(t *testing.T) {
 			args: []string{"--detach-sign", "--output=pkg.sig", "pkg.tar.zst"},
 			want: GpgInvocation{Detach: true, OutFile: "pkg.sig", File: "pkg.tar.zst"},
 		},
+		{
+			name: "--no-armor is kept for package signatures",
+			args: []string{"--batch", "--detach-sign", "--no-armor", "--local-user", "ABCD", "pkg.tar.zst"},
+			want: GpgInvocation{Detach: true, NoArmor: true, LocalUser: "ABCD", File: "pkg.tar.zst"},
+		},
 	}
 
 	for _, c := range cases {
@@ -62,6 +67,30 @@ func TestParseGpgArgs(t *testing.T) {
 			got := ParseGpgArgs(c.args)
 			if got != c.want {
 				t.Fatalf("got %+v want %+v", got, c.want)
+			}
+		})
+	}
+}
+
+// git は `-bsau` の出力をそのまま gpgsig に入れる。binary を返すと git が
+// 署名中の NUL で切り詰め、GitHub で unknown_signature_type (unverified) に
+// なるため、stdout 向けは --no-armor でも armor のままにする。
+func TestArmorOutput(t *testing.T) {
+	cases := []struct {
+		name string
+		inv  GpgInvocation
+		want bool
+	}{
+		{"git commit (stdin -> stdout)", GpgInvocation{Detach: true, Armor: true, StatusSet: true}, true},
+		{"stdout stays armored even with --no-armor", GpgInvocation{Detach: true, NoArmor: true}, true},
+		{"package .sig without --no-armor", GpgInvocation{Detach: true, File: "pkg.tar.zst"}, true},
+		{"package .sig with --no-armor", GpgInvocation{Detach: true, NoArmor: true, File: "pkg.tar.zst"}, false},
+		{"--output with --no-armor", GpgInvocation{Detach: true, NoArmor: true, OutFile: "pkg.sig"}, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := c.inv.ArmorOutput(); got != c.want {
+				t.Fatalf("ArmorOutput() = %v, want %v", got, c.want)
 			}
 		})
 	}

@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/nananek/remote-gpg-agent/internal/client"
+
 	"github.com/nananek/remote-gpg-agent/internal/pgpverify"
 )
 
@@ -143,15 +144,9 @@ func main() {
 		if outPath == "" && inv.File != "" {
 			outPath = inv.File + ".sig"
 		}
-		out := []byte(ensureNL(sig))
-		if !inv.Armor {
-			// makepkg は `--no-armor` を渡してくる。pacman は armored の .sig を
-			// 拒否するので、gpg と同じくバイナリで書く。
-			raw, err := pgpverify.Dearmor(sig)
-			if err != nil {
-				fail(err)
-			}
-			out = raw
+		out, err := encodeSignature(sig, inv.ArmorOutput())
+		if err != nil {
+			fail(err)
 		}
 		if outPath != "" {
 			if err := os.WriteFile(outPath, out, 0o644); err != nil {
@@ -212,6 +207,15 @@ func ensureNL(s string) string {
 		return s
 	}
 	return s + "\n"
+}
+
+// encodeSignature はサーバから返った armored 署名を、要求された形式にする。
+// armored=false (--no-armor + ファイル出力) のときだけ binary を返す。
+func encodeSignature(sig string, armored bool) ([]byte, error) {
+	if armored {
+		return []byte(ensureNL(sig)), nil
+	}
+	return pgpverify.Dearmor(sig)
 }
 
 // delegateToRealGPG は `gpg` と同じ引数・同じ標準入出力で本物の gpg を動かし、終了コードをそのまま返す。
