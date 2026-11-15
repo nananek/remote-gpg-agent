@@ -5,11 +5,28 @@ import "strings"
 type GpgInvocation struct {
 	Detach    bool
 	Armor     bool
+	NoArmor   bool
 	StatusFD  int
 	StatusSet bool
 	LocalUser string
 	OutFile   string
 	File      string
+}
+
+// ArmorOutput は署名を ASCII armor で出力するかを返す。
+//
+// git は `-bsau` でコミットを署名させ、その出力をそのまま `gpgsig` ヘッダに
+// 入れる。git は署名に含まれる NUL バイトで切り詰めるため、ここで binary を
+// 返すとコミット署名が壊れる (GitHub は unknown_signature_type で unverified
+// になる)。そこで stdout 向けは常に armor にする。
+//
+// binary を返すのは `--no-armor` を明示され、かつ出力先がファイル (.sig) の
+// ときだけ。pacman / repo-add / makepkg の .sig はこの形を期待する。
+func (inv GpgInvocation) ArmorOutput() bool {
+	if inv.OutFile == "" && inv.File == "" {
+		return true
+	}
+	return !inv.NoArmor
 }
 
 // ParseGpgArgs は gpg 互換の引数列から、署名に必要な情報だけを取り出す。
@@ -26,6 +43,8 @@ func ParseGpgArgs(argv []string) GpgInvocation {
 			out.Detach = true
 		case a == "--armor":
 			out.Armor = true
+		case a == "--no-armor":
+			out.NoArmor = true
 		case a == "--local-user" || a == "-u":
 			if i+1 < len(argv) {
 				i++

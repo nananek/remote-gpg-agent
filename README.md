@@ -136,6 +136,31 @@ install -m 755 scripts/gpg-shim ~/.local/bin/gpg
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
+`--no-armor` を付けた detach-sign では `.sig` を binary で書き、
+それ以外（git のコミット署名や `makepkg --sign`）は armor で返す。
+
+### 署名の形式（armor / binary）と GitHub の unverified
+
+`git` は `-bsau` で署名を要求し、返ってきたバイト列をそのまま `gpgsig` ヘッダに入れる。
+このとき git は署名中の NUL バイトで切り詰めるため、binary 署名を返すと `gpgsig` が
+数バイトになり、GitHub は `unknown_signature_type`（unverified）と表示する。
+そのため `rga gpg-compat` は標準出力へは常に armor を返す（`--no-armor` 付きでも、
+出力先がファイルのときだけ binary にする）。
+
+`gpg.program` のラッパーや SSH 越しのシムは、rga の出力をそのまま git に渡すこと。
+armor をほどく（`gpg --dearmor` など）と上の理由でコミット署名が壊れる。
+
+コミットの署名が armor かどうかは 1 行で確かめられる:
+
+```sh
+git cat-file commit HEAD | sed -n '/^gpgsig/,/^[^ ]/p' | head -2
+```
+
+数バイトしか出ない、あるいは `git log --show-signature` が
+`bad/incompatible signature` になる場合は、シムかラッパーが署名を加工している。
+加工をやめて `exec rga gpg-compat "$@"`（SSH 越しなら host 側で同じものを実行）に戻し、
+壊れたコミットは `git commit --amend -S` で署名し直す。
+
 ## PWA の使い方
 
 1. `https://<host>.<tailnet>.ts.net` を開く（ホーム画面に追加しておく）。
