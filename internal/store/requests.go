@@ -16,25 +16,38 @@ import (
 )
 
 type Request struct {
-	ID               string `json:"id"`
-	Purpose          string `json:"purpose"`
-	Description      string `json:"description"`
-	ClientName       string `json:"clientName"`
-	KeyFingerprint   string `json:"keyFingerprint"`
-	DataSHA256       string `json:"dataSha256"`
-	DataB64          string `json:"dataB64"`
-	DataSize         int    `json:"dataSize"`
-	TextMode         bool   `json:"textMode"`
-	CreatedAt        string `json:"createdAt"`
-	ExpiresAt        string `json:"expiresAt"`
-	Status           string `json:"status"`
+	ID             string `json:"id"`
+	Purpose        string `json:"purpose"`
+	Description    string `json:"description"`
+	ClientName     string `json:"clientName"`
+	KeyFingerprint string `json:"keyFingerprint"`
+	Mode           string `json:"mode"`
+	DataSHA256     string `json:"dataSha256"`
+	DataB64        string `json:"dataB64,omitempty"`
+	DataSize       int    `json:"dataSize"`
+	TextMode       bool   `json:"textMode"`
+	DigestB64      string `json:"digestB64,omitempty"`
+	SigMetaB64     string `json:"sigMetaB64,omitempty"`
+	Preview        string `json:"preview,omitempty"`
+	CreatedAt      string `json:"createdAt"`
+	ExpiresAt      string `json:"expiresAt"`
+	Status         string `json:"status"`
+	// SignatureArmored は data モード、SignatureB64 は digest モード。
 	SignatureArmored string `json:"signatureArmored,omitempty"`
+	SignatureB64     string `json:"signatureB64,omitempty"`
 	DeniedReason     string `json:"deniedReason,omitempty"`
 }
 
 type NewRequestInput struct {
-	Purpose, Description, ClientName, KeyFingerprint, DataB64 string
-	TextMode                                                  bool
+	Purpose, Description, ClientName, KeyFingerprint string
+	Mode                                             string
+	DataB64                                          string
+	DataSHA256                                       string
+	DataSize                                         int
+	DigestB64                                        string
+	SigMetaB64                                       string
+	Preview                                          string
+	TextMode                                         bool
 }
 
 func newID() string {
@@ -46,19 +59,42 @@ func newID() string {
 // CreateRequest は署名要求を作る。ctx は受け取るが bbolt は context を取らない
 // （呼び出し側の形をそろえるためだけに存在する）。
 func CreateRequest(_ context.Context, s *Store, in NewRequestInput, ttl time.Duration) (*Request, error) {
-	raw, err := base64.StdEncoding.DecodeString(in.DataB64)
-	if err != nil {
-		return nil, fmt.Errorf("dataB64: %w", err)
+	mode := in.Mode
+	if mode == "" {
+		mode = protocol.SignModeData
 	}
-	if len(raw) > protocol.MaxDataBytes {
-		return nil, fmt.Errorf("dataB64: payload exceeds %d bytes", protocol.MaxDataBytes)
+	if mode != protocol.SignModeData && mode != protocol.SignModeDigest {
+		return nil, fmt.Errorf("mode: %q is not supported", mode)
 	}
-	sum := sha256.Sum256(raw)
+
+	dataSHA256, dataSize := in.DataSHA256, in.DataSize
+	if in.DataB64 != "" {
+		raw, err := base64.StdEncoding.DecodeString(in.DataB64)
+		if err != nil {
+			return nil, fmt.Errorf("dataB64: %w", err)
+		}
+		if len(raw) > protocol.MaxDataBytes {
+			return nil, fmt.Errorf("dataB64: payload exceeds %d bytes", protocol.MaxDataBytes)
+		}
+		sum := sha256.Sum256(raw)
+		dataSHA256 = hex.EncodeToString(sum[:])
+		dataSize = len(raw)
+	}
+	if mode == protocol.SignModeDigest {
+		digest, err := base64.StdEncoding.DecodeString(in.DigestB64)
+		if err != nil || len(digest) != 32 {
+			return nil, fmt.Errorf("digestB64: must be a base64 SHA-256 digest")
+		}
+		if in.SigMetaB64 == "" {
+			return nil, fmt.Errorf("sigMetaB64 is required in digest mode")
+		}
+	}
 	now := time.Now().UTC()
 	r := &Request{
 		ID: newID(), Purpose: in.Purpose, Description: in.Description,
 		ClientName: in.ClientName, KeyFingerprint: in.KeyFingerprint,
-		DataSHA256: hex.EncodeToString(sum[:]), DataB64: in.DataB64, DataSize: len(raw),
+		Mode: mode, DataSHA256: dataSHA256, DataB64: in.DataB64, DataSize: dataSize,
+		DigestB64: in.DigestB64, SigMetaB64: in.SigMetaB64, Preview: in.Preview,
 		TextMode: in.TextMode, CreatedAt: now.Format(time.RFC3339),
 		ExpiresAt: now.Add(ttl).Format(time.RFC3339), Status: "pending",
 	}
@@ -70,6 +106,13 @@ func CreateRequest(_ context.Context, s *Store, in NewRequestInput, ttl time.Dur
 	return r, nil
 }
 
+// normalize は古い record（Mode 導入前）を data モードとして扱う。
+func (r *Request) normalize() {
+	if r.Mode == "" {
+		r.Mode = protocol.SignModeData
+	}
+}
+
 func GetRequest(_ context.Context, s *Store, id string) (*Request, error) {
 	var r Request
 	if err := s.View(func(tx *bolt.Tx) error {
@@ -77,6 +120,7 @@ func GetRequest(_ context.Context, s *Store, id string) (*Request, error) {
 	}); err != nil {
 		return nil, err
 	}
+	r.normalize()
 	return &r, nil
 }
 
@@ -92,6 +136,7 @@ func ListPending(ctx context.Context, s *Store) ([]*Request, error) {
 				return err
 			}
 			if r.Status == "pending" {
+				r.normalize()
 				cp := r
 				out = append(out, &cp)
 			}
@@ -124,7 +169,7 @@ func expirePending(r *Request, now time.Time) bool {
 
 // CompleteRequest は pending かつ期限内のときだけ signed にする。
 // 期限切れは expired に落として ok=false（署名対象の平文も消す）。
-func CompleteRequest(_ context.Context, s *Store, id, sig string) (bool, error) {
+func CompleteRequest(_ context.Context, s *Store, id, sigArmored, sigB64 string) (bool, error) {
 	ok := false
 	now := time.Now().UTC()
 	err := s.Update(func(tx *bolt.Tx) error {
@@ -139,7 +184,8 @@ func CompleteRequest(_ context.Context, s *Store, id, sig string) (bool, error) 
 		if r.Status != "pending" {
 			return nil
 		}
-		r.Status, r.SignatureArmored = "signed", sig
+		r.Status = "signed"
+		r.SignatureArmored, r.SignatureB64 = sigArmored, sigB64
 		// 署名が済んだら、サーバが平文の署名対象を持つ必要はない。
 		r.DataB64, r.Description = "", ""
 		ok = true

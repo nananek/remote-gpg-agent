@@ -2,11 +2,15 @@ package e2e
 
 import (
 	"context"
+	"crypto/ed25519"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/ProtonMail/go-crypto/openpgp"
+	"github.com/ProtonMail/go-crypto/openpgp/eddsa"
 
 	"github.com/nananek/remote-gpg-agent/internal/client"
 	"github.com/nananek/remote-gpg-agent/internal/pgpverify"
@@ -165,5 +169,119 @@ func TestGitCommitWithRemoteSigning(t *testing.T) {
 	log := run(t, env, repo, "git", "log", "--show-signature", "-1")
 	if !strings.Contains(log, "Good signature") {
 		t.Fatalf("git did not verify the commit:\n%s", log)
+	}
+}
+
+// 実運用と同じ OpenPGP.js (curve25519Legacy) の鍵で、digest モードの
+// raw Ed25519 署名から signature packet を組み、gpg が受け入れることを固定する。
+func TestDigestModeWithOpenPGPJSKeyVerifiesWithGPG(t *testing.T) {
+	requireBinary(t, "gpg")
+
+	secret, err := os.ReadFile("testdata/openpgpjs-private.asc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pub, err := os.ReadFile("testdata/openpgpjs-public.asc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile("testdata/openpgpjs-data.bin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fprRaw, err := os.ReadFile("testdata/openpgpjs-fingerprint.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fpr := strings.TrimSpace(string(fprRaw))
+
+	el, err := openpgp.ReadArmoredKeyRing(strings.NewReader(string(secret)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	priv, ok := el[0].PrivateKey.PrivateKey.(*eddsa.PrivateKey)
+	if !ok {
+		t.Fatalf("EdDSA 秘密鍵ではありません: %T", el[0].PrivateKey.PrivateKey)
+	}
+
+	meta, err := client.BuildSigMeta(fpr, time.Now().Add(-time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := client.SignedDigest(data, meta)
+	raw := ed25519.Sign(ed25519.NewKeyFromSeed(priv.D), digest)
+	sig, err := client.ArmoredSignature(meta, digest, raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := pgpverify.ArmoredDetached(string(pub), fpr, data, sig); err != nil {
+		t.Fatalf("pgpverify: %v", err)
+	}
+
+	home, env := gpgEnv(t)
+	run(t, env, "", "gpg", "--batch", "--import", "testdata/openpgpjs-public.asc")
+	dir := t.TempDir()
+	dataPath := filepath.Join(dir, "data.bin")
+	sigPath := filepath.Join(dir, "data.asc")
+	if err := os.WriteFile(dataPath, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(sigPath, []byte(sig), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out := run(t, env, "", "gpg", "--batch", "--status-fd=1", "--verify", sigPath, dataPath)
+	if !strings.Contains(out, "[GNUPG:] GOODSIG") {
+		t.Fatalf("gpg rejected the digest-mode signature (GNUPGHOME=%s):\n%s", home, out)
+	}
+}
+
+// 1 MiB を超えるデータは本体を送らず、digest だけで gpg 検証可能な署名を作る。
+func TestLargeDataSigningUsesDigestOnly(t *testing.T) {
+	requireBinary(t, "gpg")
+	s := startStack(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	go s.autoApprove(t, ctx)
+
+	c, err := client.New(mustConfig(t, s))
+	if err != nil {
+		t.Fatal(err)
+	}
+	data := make([]byte, 4<<20)
+	for i := range data {
+		data[i] = byte(i * 31)
+	}
+	sig, err := client.RequestSignature(ctx, c, client.SignInput{
+		Purpose: "makepkg", Description: "large", Fingerprint: s.fingerprint,
+		Data: data, Timeout: 20 * time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	dir := t.TempDir()
+	home := filepath.Join(dir, "gnupg")
+	if err := os.MkdirAll(home, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	env := append(os.Environ(), "GNUPGHOME="+home)
+	pubPath := filepath.Join(dir, "pub.asc")
+	dataPath := filepath.Join(dir, "data.bin")
+	sigPath := filepath.Join(dir, "data.asc")
+	if err := os.WriteFile(pubPath, []byte(s.publicArmored), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dataPath, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(sigPath, []byte(sig), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	run(t, env, "", "gpg", "--batch", "--import", pubPath)
+	out := run(t, env, "", "gpg", "--batch", "--status-fd=1", "--verify", sigPath, dataPath)
+	if !strings.Contains(out, "[GNUPG:] GOODSIG") {
+		t.Fatalf("gpg rejected the large-data signature:\n%s", out)
 	}
 }

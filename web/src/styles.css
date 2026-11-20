@@ -139,6 +139,13 @@ pre.preview {
   color: var(--danger);
 }
 
+.warn {
+  padding: 10px 12px;
+  border-left: 3px solid #b26a00;
+  background: #fff8e8;
+  color: #6b4100;
+}
+
 .ok {
   margin-top: 16px;
 }

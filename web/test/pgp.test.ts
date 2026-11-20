@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import * as openpgp from 'openpgp';
-import { generateKey, signDetached, selfTest, exportBackup, importBackup, describe as describeKey } from '../src/pgp';
+import { generateKey, signDetached, selfTest, exportBackup, importBackup, describe as describeKey, signDigest, openpgpDigest } from '../src/pgp';
 
 describe('pgp', () => {
   it('generates a v4 ed25519 key that signs and verifies', async () => {
@@ -19,6 +19,33 @@ describe('pgp', () => {
       verificationKeys: await openpgp.readKey({ armoredKey: generated.armoredPublic }),
     });
     await expect(verified.signatures[0].verified).resolves.toBeTruthy();
+  });
+
+  it('computes the OpenPGP digest over data + signature metadata + trailer', async () => {
+    const data = new TextEncoder().encode('hello');
+    const meta = new Uint8Array([4, 0, 22, 8, 0, 0]);
+    const digest = await openpgpDigest(data, meta);
+    expect(Array.from(digest, (b) => b.toString(16).padStart(2, '0')).join('')).toBe(
+      '7a500204e5a14015100a09929b9f28d422b17b21a748a046f238d811330b9901',
+    );
+  });
+
+  it('signs a 32-byte digest with Ed25519 and verifies with the public key', async () => {
+    const generated = await generateKey('p', 'A', 'a@example.com');
+    const key = await openpgp.readPrivateKey({ armoredKey: generated.armoredSecret });
+    const Q = (key.keyPacket as any).publicParams.Q as Uint8Array;
+    const digest = crypto.getRandomValues(new Uint8Array(32));
+    const signature = await signDigest(generated.armoredSecret, digest);
+    expect(signature).toHaveLength(64);
+
+    const publicKey = await crypto.subtle.importKey(
+      'jwk',
+      { kty: 'OKP', crv: 'Ed25519', x: Buffer.from(Q.slice(1)).toString('base64url') },
+      'Ed25519',
+      false,
+      ['verify'],
+    );
+    await expect(crypto.subtle.verify('Ed25519', publicKey, signature, digest)).resolves.toBe(true);
   });
 
   it('describes the key with a matching fingerprint', async () => {

@@ -37,6 +37,10 @@ PWA から `git commit -S` / `makepkg --sign` を完了させるための署名�
 - 解錠時に復号できなかった envelope はスキップし、残りの鍵はそのまま使える（壊れた鍵だけバックアップから戻す）。
 - クライアントは、返ってきた署名を **自分が送ったバイト列とピン留め fingerprint** で必ず検証する。
   サーバがデータをすり替えても通らない。
+- 署名要求は既定で **digest モード**。クライアントが OpenPGP の署名対象 digest を計算し、
+  PWA にはその digest だけを送る。パッケージのような大きいファイルの本体はサーバに送らない。
+  小さいデータ（1 MiB 以下）は PWA が内容と digest の対応を検証できるよう同梱する。
+  大きいデータでは PWA は内容を検証できないため、承認画面にその旨を表示する。
 - 通信は Tailscale の上に mTLS を重ねる。8443 は tailscaled で TLS 終端しない（証明書を消さないため）。
 
 ## リポジトリ構成
@@ -47,7 +51,7 @@ cmd/rga/           クライアント CLI（ping / sign / gpg-compat / keys / pu
 internal/protocol/ JSON 契約と keyId 導出
 internal/store/    bbolt 永続化
 internal/server/   2 listener、WebAuthn、vault、承認 API
-internal/client/   gpg 引数パース、mTLS transport、署名ループ
+internal/client/   gpg 引数パース、mTLS transport、digest と signature packet の組み立て
 internal/pgpverify/ 返却署名のローカル検証
 web/               PWA（Vite + TypeScript + OpenPGP.js v6）。ビルド成果物 dist/ は commit 済み
 deploy/            Dockerfile / docker-compose.yml / tailscale serve 設定
@@ -102,7 +106,9 @@ fixture を作り直すときは `cd web && node scripts/gen-openpgp-fixture.mjs
 ```
 
 `timeoutSec` は要求を出してから PWA の承認を待つ上限（既定 900 秒 = 15 分）。
-サーバ側の要求の寿命は `RGA_REQUEST_TTL_SEC`（既定 900 秒）で変えられる。
+サーバ側の要求の寿命は、client が送った `timeoutSec` に 120 秒の余裕を足した値と
+`RGA_REQUEST_TTL_SEC`（既定 900 秒）の大きい方になる。client が待つのをやめると
+要求は取り消され、PWA の承認待ちには残らない。
 PWA の承認画面には残り時間がドーナツで表示され、減るにつれて緑から赤に変わる。
 
 動作確認:
@@ -194,6 +200,10 @@ RGA_DISCORD_WEBHOOK=https://discord.com/api/webhooks/...
 
 - パスキーの PRF 拡張が必須（iOS 18+ / Safari、Chrome など）。非対応環境では登録できない。
 - 鍵は OpenPGP.js の `curve25519Legacy`（v4）。GnuPG 2.4 との相互運用を e2e で固定している。
+- digest モードの PWA は WebCrypto の Ed25519 で 32 byte の digest に署名する。
+  iOS 18+ / 現行の Chrome・Firefox が対象。非対応のブラウザでは署名できない。
+- 1 MiB を超えるデータは PWA に本体が送られない。承認画面のファイル名・サイズ・SHA-256 と、
+  端末側のビルド結果を照合してから承認する。
 - サーバを落とすと署名できない。バックアップ `.asc` から gpg に戻す道は常に残す。
 - 利用者 1 人・vault 1 つが前提。クライアント証明書は台数分発行できるが、鍵は全クライアントで共有される。
 - クライアント証明書の失効は未対応（CRL/OCSP を見ていない）。古い証明書は期限まで有効なので、

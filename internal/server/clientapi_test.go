@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"io"
@@ -243,5 +244,66 @@ func TestKeysEndpoints(t *testing.T) {
 	resp.Body.Close()
 	if one.PublicKeyArmored == "" || one.Label != "personal" {
 		t.Fatalf("detail: %+v", one)
+	}
+}
+
+func TestCreateRequestExpandsTTLForClientTimeout(t *testing.T) {
+	h := newTestServer(t)
+	c := h.mtlsClient(t)
+	resp, body := postJSON(t, c, h.clientURL("/api/v1/requests"), protocol.CreateSignRequest{
+		Purpose: "makepkg", Description: "big", KeyFingerprint: fprForTest,
+		Mode: protocol.SignModeDigest, TimeoutSec: 60,
+		DigestB64:  base64.StdEncoding.EncodeToString(make([]byte, 32)),
+		SigMetaB64: base64.StdEncoding.EncodeToString([]byte{4, 0, 22, 8, 0, 0}),
+		DataSHA256: "aa", DataSize: 1,
+	})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", resp.StatusCode, body)
+	}
+	var created protocol.CreateSignRequestResponse
+	if err := json.Unmarshal(body, &created); err != nil {
+		t.Fatal(err)
+	}
+	if created.Mode != protocol.SignModeDigest {
+		t.Fatalf("mode: %q", created.Mode)
+	}
+	expires, err := time.Parse(time.RFC3339, created.ExpiresAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	remaining := time.Until(expires)
+	if remaining < 170*time.Second || remaining > 200*time.Second {
+		t.Fatalf("TTL must be client timeout + grace: %v", remaining)
+	}
+}
+
+func TestClientCanCancelPendingRequest(t *testing.T) {
+	h := newTestServer(t)
+	seedKey(t, h)
+	sid, err := createSessionFor(t, h, "cred-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pc := h.pwaClient(t)
+	setCookie(t, pc, h, sid)
+	id := createRequestFor(t, h)
+
+	_, list := pwaGet(t, pc, h.webURL("/api/v1/requests"))
+	if reqs, _ := list["requests"].([]any); len(reqs) != 1 {
+		t.Fatalf("before cancel: %v", list)
+	}
+
+	cc := h.mtlsClient(t)
+	resp, body := postJSON(t, cc, h.clientURL("/api/v1/requests/"+id+"/cancel"), map[string]any{})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("cancel: %d %s", resp.StatusCode, body)
+	}
+	_, list = pwaGet(t, pc, h.webURL("/api/v1/requests"))
+	if reqs, _ := list["requests"].([]any); len(reqs) != 0 {
+		t.Fatalf("after cancel: %v", list)
+	}
+	row, _ := store.GetRequest(context.Background(), h.server.db, id)
+	if row.Status != "denied" {
+		t.Fatalf("status: %s", row.Status)
 	}
 }

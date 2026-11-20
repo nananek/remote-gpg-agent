@@ -98,7 +98,7 @@ function sameIdentity(a?: CommitIdentity, b?: CommitIdentity): boolean {
 }
 
 function renderCommit(r: PendingRequest): string | null {
-  const { text, truncated } = decodePrefix(r.dataB64, 128 * 1024);
+  const { text, truncated } = decodePrefix(r.dataPreviewB64 ?? '', 128 * 1024);
   const c = parseCommitObject(text);
   if (!c) return null;
 
@@ -128,11 +128,12 @@ function renderCommit(r: PendingRequest): string | null {
 }
 
 function renderPackage(r: PendingRequest): string {
-  const hex = hexPreview(r.dataB64, 32);
+  const hex = hexPreview(r.dataPreviewB64 ?? '', 32);
   return `
     <div class="archive">
       <p class="archive-file">${escapeHtml(r.description)}</p>
       <p class="meta">${formatBytes(r.dataSize)} のバイナリ全体に分離署名を付けます。</p>
+      ${r.preview ? `<p class="meta">${escapeHtml(r.preview)}</p>` : ''}
       ${hex ? `<pre class="preview hex">${escapeHtml(hex)} …</pre>` : ''}
     </div>`;
 }
@@ -144,7 +145,7 @@ function renderBody(r: PendingRequest): string {
   }
   if (isPackagePurpose(r.purpose)) return renderPackage(r);
 
-  const { text, truncated } = decodePrefix(r.dataB64, 4096);
+  const { text, truncated } = decodePrefix(r.dataPreviewB64 ?? '', 4096);
   return `<pre class="preview">${escapeHtml(sanitizeText(text))}${truncated ? '\n…（以下省略）' : ''}</pre>`;
 }
 
@@ -218,6 +219,9 @@ export function renderApprove(params: {
         </div>
         <p class="meta">${escapeHtml(keyLabel)} · ${formatBytes(r.dataSize)} · sha256 ${escapeHtml(r.dataSha256.slice(0, 16))}…</p>
         <p class="meta request-desc">${escapeHtml(r.description)}</p>
+        ${r.mode === 'digest' && !(r.dataAvailable && r.dataSize <= 1 << 20)
+          ? '<p class="meta warn">内容はこの端末に送られていません。ファイル名・サイズ・SHA-256 を確認して承認してください。</p>'
+          : ''}
         ${renderBody(r)}
         <div class="row">
           <button class="primary" data-sign="${r.id}" ${disabled ? 'disabled' : ''}>${remaining.expired ? '期限切れ' : '署名する'}</button>

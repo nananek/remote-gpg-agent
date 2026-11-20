@@ -1,9 +1,9 @@
 import { api } from './api';
 import { assertWithPrf, createPasskey } from './ceremonies';
-import { generateKey, importBackup, selfTest, signDetached, describe, exportBackup } from './pgp';
+import { generateKey, importBackup, selfTest, signDetached, describe, exportBackup, openpgpDigest, signDigest } from './pgp';
 import { deriveWrapKey, envelopeProofMessage, open, seal, type Envelope } from './vault';
 import { state, type UnlockedKey } from './state';
-import { sha256Hex, unb64 } from './b64';
+import { b64, sha256Hex, unb64 } from './b64';
 
 export const PRF_MISSING =
   'この認証器は PRF 非対応です。iOS 18.4 以降 + iCloud キーチェーンのパスキーが必要です。';
@@ -260,17 +260,55 @@ export async function addKey(params: { label: string; name: string; email: strin
   return unlocked;
 }
 
-/** 承認: 要求のバイト列をそのまま署名する。 */
-export async function approve(request: { id: string; dataB64: string; dataSha256: string }, fingerprint: string): Promise<void> {
+/** 承認: digest モードは client が計算した digest に署名する。 */
+export async function approve(
+  request: {
+    id: string;
+    mode: 'digest' | 'data';
+    dataSha256: string;
+    dataSize: number;
+    dataAvailable?: boolean;
+    digestB64?: string;
+    sigMetaB64?: string;
+  },
+  fingerprint: string,
+): Promise<void> {
   const key = state.find(fingerprint);
   if (!key) throw new Error(`${fingerprint.slice(-16)} はこの端末では解錠されていません`);
 
-  const data = unb64(request.dataB64);
+  if (request.mode === 'digest') {
+    if (!request.digestB64 || !request.sigMetaB64) {
+      throw new Error('署名対象の digest が要求に含まれていません');
+    }
+    const digest = unb64(request.digestB64);
+    const sigMeta = unb64(request.sigMetaB64);
+
+    // データ本体が同梱されているときは、client が渡した digest を自分で
+    // 計算し直して照合する。大きいデータは本体が無いので digest だけを
+    // 信頼する（画面にその旨を出す）。
+    if (request.dataAvailable && request.dataSize <= 1 << 20) {
+      const data = await api.requestData(request.id);
+      const expectedSize = request.dataSize;
+      if (expectedSize >= 0 && data.length !== expectedSize) {
+        throw new Error('要求のデータ長が一致しません');
+      }
+      const computed = await openpgpDigest(data, sigMeta);
+      if (b64(computed) !== b64(digest)) {
+        throw new Error('要求の digest が一致しません（通信中の改ざんの可能性）');
+      }
+    }
+
+    const signature = await signDigest(key.armoredSecret, digest);
+    await api.sign(request.id, { signatureB64: b64(signature) });
+    return;
+  }
+
+  const data = await api.requestData(request.id);
   const digest = await sha256Hex(data);
   if (digest !== request.dataSha256) {
     throw new Error('要求のハッシュが一致しません（通信中の改ざんの可能性）');
   }
-  await api.sign(request.id, await signDetached(key.armoredSecret, data));
+  await api.sign(request.id, { signatureArmored: await signDetached(key.armoredSecret, data) });
 }
 
 export async function deny(id: string): Promise<void> {

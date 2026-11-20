@@ -2,7 +2,9 @@ package client
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"strings"
@@ -25,15 +27,38 @@ type SignInput struct {
 }
 
 // RequestSignature は要求を積み、PWA の承認をロングポールで待つ。
+//
+// 通常は digest モード: client が OpenPGP の署名対象 digest を計算し、
+// PWA にはその digest だけを送る。データ本体は server に送らないので、
+// 大きいパッケージでも通信量と bbolt の使用量が増えない。
 func RequestSignature(ctx context.Context, t Transport, in SignInput) (string, error) {
-	var created rgaproto.CreateSignRequestResponse
-	if err := t.Do("POST", "/api/v1/requests", rgaproto.CreateSignRequest{
+	meta, err := BuildSigMeta(in.Fingerprint, time.Now())
+	if err != nil {
+		return "", err
+	}
+	digest := SignedDigest(in.Data, meta)
+	dataSHA := sha256.Sum256(in.Data)
+
+	req := rgaproto.CreateSignRequest{
 		Purpose:        in.Purpose,
 		Description:    in.Description,
 		KeyFingerprint: in.Fingerprint,
-		TextMode:       true,
-		DataB64:        base64.StdEncoding.EncodeToString(in.Data),
-	}, &created); err != nil {
+		Mode:           rgaproto.SignModeDigest,
+		TimeoutSec:     int(in.Timeout / time.Second),
+		DigestB64:      base64.StdEncoding.EncodeToString(digest),
+		SigMetaB64:     base64.StdEncoding.EncodeToString(meta),
+		DataSHA256:     hex.EncodeToString(dataSHA[:]),
+		DataSize:       len(in.Data),
+		Preview:        in.Description,
+	}
+	// 小さいデータは PWA が内容と digest の対応を検証できるように同梱する。
+	// 大きいデータは送らない（PWA には digest だけが届く）。
+	if len(in.Data) <= smallDataLimit {
+		req.DataB64 = base64.StdEncoding.EncodeToString(in.Data)
+	}
+
+	var created rgaproto.CreateSignRequestResponse
+	if err := t.Do("POST", "/api/v1/requests", req, &created); err != nil {
 		return "", err
 	}
 
@@ -44,9 +69,22 @@ func RequestSignature(ctx context.Context, t Transport, in SignInput) (string, e
 	fmt.Fprintf(os.Stderr, "rga: PWA の承認待ちです（要求 %s）\n", short)
 
 	deadline := time.Now().Add(in.Timeout)
+	if when, err := time.Parse(time.RFC3339, created.ExpiresAt); err == nil {
+		// server の寿命を優先する。client の timeout より server が先に
+		// 切れる設定でも、期限の意味がずれない。
+		if when.Before(deadline) {
+			deadline = when
+		}
+	}
+	cancel := func() {
+		// 待つのをやめた要求を PWA の一覧に残さない。
+		_ = t.Do("POST", "/api/v1/requests/"+created.ID+"/cancel", nil, nil)
+	}
+
 	for {
 		select {
 		case <-ctx.Done():
+			cancel()
 			return "", ctx.Err()
 		default:
 		}
@@ -57,6 +95,13 @@ func RequestSignature(ctx context.Context, t Transport, in SignInput) (string, e
 		}
 		switch res.Status {
 		case "signed":
+			if res.SignatureB64 != "" {
+				raw, err := base64.StdEncoding.DecodeString(res.SignatureB64)
+				if err != nil {
+					return "", fmt.Errorf("署名をデコードできません: %w", err)
+				}
+				return ArmoredSignature(meta, digest, raw)
+			}
 			if res.SignatureArmored == "" {
 				return "", fmt.Errorf("署名が空でした")
 			}
@@ -67,6 +112,7 @@ func RequestSignature(ctx context.Context, t Transport, in SignInput) (string, e
 			return "", fmt.Errorf("署名要求が期限切れになりました")
 		}
 		if time.Now().After(deadline) {
+			cancel()
 			return "", fmt.Errorf("承認待ちがタイムアウトしました")
 		}
 	}

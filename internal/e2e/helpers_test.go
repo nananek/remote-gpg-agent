@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
@@ -23,6 +24,8 @@ import (
 	"crypto/hkdf"
 	"github.com/ProtonMail/go-crypto/openpgp"
 	"github.com/ProtonMail/go-crypto/openpgp/armor"
+	"github.com/ProtonMail/go-crypto/openpgp/eddsa"
+	"github.com/ProtonMail/go-crypto/openpgp/packet"
 
 	"github.com/nananek/remote-gpg-agent/internal/client"
 	"github.com/nananek/remote-gpg-agent/internal/protocol"
@@ -76,8 +79,11 @@ func startStack(t *testing.T) *stack {
 		t.Fatal(err)
 	}
 
-	// 偽 PWA が持つ鍵（Go の openpgp で作る。curve25519 の互換性は fixture テストで見る）。
-	ent, err := openpgp.NewEntity("E2E User", "", "e2e@example.com", nil)
+	// 偽 PWA が持つ鍵。digest モードは Ed25519 の raw 署名を扱うので、
+	// 本番 PWA と同じ EdDSA（curve25519Legacy）で作る。
+	ent, err := openpgp.NewEntity("E2E User", "", "e2e@example.com", &packet.Config{
+		Algorithm: packet.PubKeyAlgoEdDSA,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -246,12 +252,24 @@ func (s *stack) autoApprove(t *testing.T, ctx context.Context) {
 		t.Errorf("秘密鍵を読めません: %v", err)
 		return
 	}
-	sign := func(data []byte) (string, error) {
+	signData := func(data []byte) (string, error) {
 		var buf bytes.Buffer
 		if err := openpgp.ArmoredDetachSign(&buf, el[0], bytes.NewReader(data), nil); err != nil {
 			return "", err
 		}
 		return buf.String(), nil
+	}
+	priv, ok := el[0].PrivateKey.PrivateKey.(*eddsa.PrivateKey)
+	if !ok {
+		t.Errorf("EdDSA 秘密鍵ではありません: %T", el[0].PrivateKey.PrivateKey)
+		return
+	}
+	signDigest := func(digest []byte) (string, error) {
+		if len(digest) != sha256.Size {
+			return "", fmt.Errorf("digest must be 32 bytes")
+		}
+		sig := ed25519.Sign(ed25519.NewKeyFromSeed(priv.D), digest)
+		return base64.StdEncoding.EncodeToString(sig), nil
 	}
 
 	base := "http://" + s.webAddr
@@ -272,16 +290,31 @@ func (s *stack) autoApprove(t *testing.T, ctx context.Context) {
 		resp.Body.Close()
 
 		for _, r := range list.Requests {
-			data, err := base64.StdEncoding.DecodeString(r.DataB64)
-			if err != nil {
-				continue
+			var body []byte
+			if r.Mode == protocol.SignModeDigest {
+				digest, err := base64.StdEncoding.DecodeString(r.DigestB64)
+				if err != nil {
+					continue
+				}
+				sig, err := signDigest(digest)
+				if err != nil {
+					t.Errorf("digest に署名できません: %v", err)
+					continue
+				}
+				body, _ = json.Marshal(map[string]string{"signatureB64": sig})
+			} else {
+				data, err := fetchRequestData(ctx, client, base, s.sessionID, r.ID)
+				if err != nil {
+					t.Errorf("データを取得できません: %v", err)
+					continue
+				}
+				sig, err := signData(data)
+				if err != nil {
+					t.Errorf("署名できません: %v", err)
+					continue
+				}
+				body, _ = json.Marshal(map[string]string{"signatureArmored": sig})
 			}
-			sig, err := sign(data)
-			if err != nil {
-				t.Errorf("署名できません: %v", err)
-				continue
-			}
-			body, _ := json.Marshal(map[string]string{"signatureArmored": sig})
 			post, _ := http.NewRequestWithContext(ctx, "POST", base+"/api/v1/requests/"+r.ID+"/sign", bytes.NewReader(body))
 			post.Header.Set("cookie", "rga_session="+s.sessionID)
 			post.Header.Set("content-type", "application/json")
@@ -291,6 +324,20 @@ func (s *stack) autoApprove(t *testing.T, ctx context.Context) {
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
+}
+
+func fetchRequestData(ctx context.Context, client *http.Client, base, sessionID, id string) ([]byte, error) {
+	req, _ := http.NewRequestWithContext(ctx, "GET", base+"/api/v1/requests/"+id+"/data", nil)
+	req.Header.Set("cookie", "rga_session="+sessionID)
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("data: %s", resp.Status)
+	}
+	return io.ReadAll(resp.Body)
 }
 
 func requireBinary(t *testing.T, name string) {

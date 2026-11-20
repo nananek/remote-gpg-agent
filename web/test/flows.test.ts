@@ -9,6 +9,8 @@ vi.mock('../src/api', () => ({
     loginVerify: vi.fn(),
     state: vi.fn(),
     sealKey: vi.fn(),
+    sign: vi.fn(),
+    requestData: vi.fn(),
   },
 }));
 
@@ -21,6 +23,8 @@ vi.mock('../src/pgp', () => ({
   generateKey: vi.fn(),
   selfTest: vi.fn(),
   signDetached: vi.fn(),
+  signDigest: vi.fn(),
+  openpgpDigest: vi.fn(),
   describe: vi.fn(),
   exportBackup: vi.fn(),
   importBackup: vi.fn(),
@@ -28,11 +32,11 @@ vi.mock('../src/pgp', () => ({
 
 import { api } from '../src/api';
 import { assertWithPrf, createPasskey } from '../src/ceremonies';
-import { describe as describeKey, generateKey, selfTest, signDetached } from '../src/pgp';
+import { describe as describeKey, generateKey, selfTest, signDetached, signDigest, openpgpDigest } from '../src/pgp';
 import { b64, unb64 } from '../src/b64';
 import { state, type UnlockedKey } from '../src/state';
 import { deriveWrapKey, open, seal } from '../src/vault';
-import { addKey, addPasskey, publicKey, unlock } from '../src/flows';
+import { addKey, addPasskey, approve, publicKey, unlock } from '../src/flows';
 
 const apiMock = api as any;
 
@@ -55,6 +59,7 @@ beforeEach(() => {
   apiMock.sealKey.mockResolvedValue({ keyId: KEY_ID_2 });
   (selfTest as any).mockResolvedValue(undefined);
   (signDetached as any).mockResolvedValue('PROOF');
+  (signDigest as any).mockResolvedValue(new Uint8Array(64).fill(7));
 });
 
 describe('addPasskey', () => {
@@ -237,5 +242,48 @@ describe('publicKey', () => {
 
   it('解錠していない fingerprint は拒否する', async () => {
     await expect(publicKey(FP2)).rejects.toThrow('鍵が見つかりません');
+  });
+});
+
+
+describe('approve', () => {
+  const digestB64 = b64(new Uint8Array(32).fill(1));
+  const sigMetaB64 = b64(new Uint8Array([4, 0, 22, 8, 0, 0]));
+
+  beforeEach(() => {
+    state.set('cred-old', [key1()], PRF_OLD);
+    apiMock.sign.mockResolvedValue({ ok: true });
+    apiMock.requestData.mockResolvedValue(new Uint8Array([1, 2, 3]));
+  });
+
+  it('digest モードは digest に署名し、raw 署名を送る', async () => {
+    await approve({
+      id: 'r1', mode: 'digest', dataSha256: 'aa', dataSize: 3,
+      dataAvailable: false, digestB64, sigMetaB64,
+    }, FP1);
+
+    expect(signDigest).toHaveBeenCalledWith('SECRET-1', unb64(digestB64));
+    expect(apiMock.sign).toHaveBeenCalledWith('r1', { signatureB64: b64(new Uint8Array(64).fill(7)) });
+  });
+
+  it('データが同梱されていれば digest を再計算して照合する', async () => {
+    (openpgpDigest as any).mockResolvedValue(unb64(digestB64));
+    await approve({
+      id: 'r1', mode: 'digest', dataSha256: 'aa', dataSize: 3,
+      dataAvailable: true, digestB64, sigMetaB64,
+    }, FP1);
+
+    expect(apiMock.requestData).toHaveBeenCalledWith('r1');
+    expect(openpgpDigest).toHaveBeenCalled();
+  });
+
+  it('digest が一致しなければ署名しない', async () => {
+    (openpgpDigest as any).mockResolvedValue(new Uint8Array(32).fill(9));
+    await expect(approve({
+      id: 'r1', mode: 'digest', dataSha256: 'aa', dataSize: 3,
+      dataAvailable: true, digestB64, sigMetaB64,
+    }, FP1)).rejects.toThrow(/digest/);
+    expect(signDigest).not.toHaveBeenCalled();
+    expect(apiMock.sign).not.toHaveBeenCalled();
   });
 });

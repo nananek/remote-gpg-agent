@@ -37,10 +37,17 @@ export interface PendingRequest {
   description: string;
   clientName: string;
   keyFingerprint: string;
+  mode: 'digest' | 'data';
   dataSha256: string;
   dataSize: number;
-  dataB64: string;
+  /** 一覧表示用の先頭部分。本体は承認時に requestData() で取得する。 */
+  dataPreviewB64?: string;
+  dataAvailable: boolean;
   textMode: boolean;
+  digestB64?: string;
+  sigMetaB64?: string;
+  /** データ本体を送らないときの人間向け説明。 */
+  preview?: string;
   createdAt: string;
   expiresAt: string;
 }
@@ -116,8 +123,26 @@ export const api = {
 
   pending: () => call<PendingResponse>('GET', '/api/v1/requests?status=pending'),
 
-  sign: (id: string, signatureArmored: string) =>
-    call('POST', `/api/v1/requests/${id}/sign`, { signatureArmored }),
+  sign: (id: string, body: { signatureB64?: string; signatureArmored?: string }) =>
+    call('POST', `/api/v1/requests/${id}/sign`, body),
+
+  requestData: async (id: string): Promise<Uint8Array> => {
+    const res = await fetch(`/api/v1/requests/${id}/data`, {
+      credentials: 'same-origin',
+      headers: { 'x-rga-client': 'pwa' },
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      let msg = text;
+      try {
+        msg = (JSON.parse(text) as { error?: string }).error ?? text;
+      } catch {
+        /* そのまま */
+      }
+      throw new Error(msg || `HTTP ${res.status}`);
+    }
+    return new Uint8Array(await res.arrayBuffer());
+  },
 
   deny: (id: string, reason: string) => call('POST', `/api/v1/requests/${id}/deny`, { reason }),
 

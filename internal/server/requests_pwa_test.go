@@ -2,11 +2,14 @@ package server
 
 import (
 	"context"
+	"encoding/base64"
+	"io"
 	"net/http"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/nananek/remote-gpg-agent/internal/protocol"
 	"github.com/nananek/remote-gpg-agent/internal/store"
 )
 
@@ -152,5 +155,77 @@ func TestPendingRequestsAreScopedToUnlockableKeys(t *testing.T) {
 		map[string]any{"signatureArmored": sig}, nil)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("sign with the key: %d %v", resp.StatusCode, body)
+	}
+}
+
+func TestPendingListDoesNotCarryPayloadAndDataEndpointReturnsIt(t *testing.T) {
+	h := newTestServer(t)
+	seedKey(t, h)
+	sid, err := createSessionFor(t, h, "cred-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := h.pwaClient(t)
+	setCookie(t, c, h, sid)
+	id := createRequestFor(t, h) // "hello"
+
+	_, list := pwaGet(t, c, h.webURL("/api/v1/requests"))
+	reqs, _ := list["requests"].([]any)
+	if len(reqs) != 1 {
+		t.Fatalf("requests: %v", list)
+	}
+	first, _ := reqs[0].(map[string]any)
+	if _, ok := first["dataB64"]; ok {
+		t.Fatalf("pending list must not include the payload: %v", first)
+	}
+	if first["dataPreviewB64"] == "" || first["dataAvailable"] != true {
+		t.Fatalf("preview/dataAvailable missing: %v", first)
+	}
+
+	resp, err := c.Get(h.webURL("/api/v1/requests/" + id + "/data"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK || string(raw) != "hello" {
+		t.Fatalf("data: %d %q", resp.StatusCode, raw)
+	}
+}
+
+func TestDigestModeRequiresRawEd25519Signature(t *testing.T) {
+	h := newTestServer(t)
+	seedKey(t, h)
+	sid, err := createSessionFor(t, h, "cred-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := h.pwaClient(t)
+	setCookie(t, c, h, sid)
+
+	row, err := store.CreateRequest(context.Background(), h.server.db, store.NewRequestInput{
+		Purpose: "makepkg", Description: "big", ClientName: "test-client",
+		KeyFingerprint: fprForTest, Mode: protocol.SignModeDigest,
+		DigestB64:  base64.StdEncoding.EncodeToString(make([]byte, 32)),
+		SigMetaB64: base64.StdEncoding.EncodeToString([]byte{4, 0, 22, 8, 0, 0}),
+		DataSHA256: "aa", DataSize: 123,
+	}, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	resp, _ := pwaPost(t, c, h.webURL("/api/v1/requests/"+row.ID+"/sign"),
+		map[string]any{"signatureB64": base64.StdEncoding.EncodeToString(make([]byte, 63))}, nil)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("63-byte signature: want 400, got %d", resp.StatusCode)
+	}
+	resp, _ = pwaPost(t, c, h.webURL("/api/v1/requests/"+row.ID+"/sign"),
+		map[string]any{"signatureB64": base64.StdEncoding.EncodeToString(make([]byte, 64))}, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("64-byte signature: want 200, got %d", resp.StatusCode)
+	}
+	got, _ := store.GetRequest(context.Background(), h.server.db, row.ID)
+	if got.SignatureB64 == "" || got.SignatureArmored != "" {
+		t.Fatalf("signature fields: %+v", got)
 	}
 }

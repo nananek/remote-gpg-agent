@@ -98,7 +98,8 @@ RGA_VAPID_SUBJECT=mailto:you@example.com
 RGA_VAPID_PUBLIC=...
 RGA_VAPID_PRIVATE=...
 RGA_BOOTSTRAP_TOKEN=...
-# 任意: 署名要求の寿命（秒）。既定 900（15 分）
+# 任意: 署名要求の寿命の下限（秒）。既定 900（15 分）。
+# client が timeoutSec を送ると、server は timeoutSec + 120 秒を寿命にする。
 # RGA_REQUEST_TTL_SEC=900
 ```
 

@@ -11,18 +11,24 @@ import (
 
 // fakeTransport は決められた順に応答を返す。
 type fakeTransport struct {
-	posts    int
-	gets     int
-	statuses []string
-	keys     []rgaproto.KeyMeta
+	posts      int
+	gets       int
+	statuses   []string
+	keys       []rgaproto.KeyMeta
+	lastCreate *rgaproto.CreateSignRequest
 }
 
 func (f *fakeTransport) Do(method, path string, body any, out any) error {
 	switch method {
 	case "POST":
-		f.posts++
-		*(out.(*rgaproto.CreateSignRequestResponse)) = rgaproto.CreateSignRequestResponse{
-			ID: "req-1234567890", ExpiresAt: time.Now().Add(time.Minute).Format(time.RFC3339),
+		if path == "/api/v1/requests" {
+			f.posts++
+			if req, ok := body.(rgaproto.CreateSignRequest); ok {
+				f.lastCreate = &req
+			}
+			*(out.(*rgaproto.CreateSignRequestResponse)) = rgaproto.CreateSignRequestResponse{
+				ID: "req-1234567890", ExpiresAt: time.Now().Add(time.Minute).Format(time.RFC3339),
+			}
 		}
 		return nil
 	case "GET":
@@ -55,7 +61,7 @@ func (f *fakeTransport) Do(method, path string, body any, out any) error {
 func TestRequestSignatureReturnsWhenSigned(t *testing.T) {
 	ft := &fakeTransport{statuses: []string{"pending", "pending", "signed"}}
 	sig, err := RequestSignature(context.Background(), ft, SignInput{
-		Purpose: "git-commit", Description: "x", Fingerprint: "A", Data: []byte("hello"), Timeout: 5 * time.Second,
+		Purpose: "git-commit", Description: "x", Fingerprint: "0123456789ABCDEF0123456789ABCDEF01234567", Data: []byte("hello"), Timeout: 5 * time.Second,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -68,7 +74,7 @@ func TestRequestSignatureReturnsWhenSigned(t *testing.T) {
 func TestRequestSignatureReportsDenied(t *testing.T) {
 	ft := &fakeTransport{statuses: []string{"denied"}}
 	_, err := RequestSignature(context.Background(), ft, SignInput{
-		Purpose: "x", Description: "x", Fingerprint: "A", Data: []byte("x"), Timeout: time.Second,
+		Purpose: "x", Description: "x", Fingerprint: "0123456789ABCDEF0123456789ABCDEF01234567", Data: []byte("x"), Timeout: time.Second,
 	})
 	if err == nil || !contains(err.Error(), "拒否") {
 		t.Fatalf("want denied error, got %v", err)
@@ -78,7 +84,7 @@ func TestRequestSignatureReportsDenied(t *testing.T) {
 func TestRequestSignatureReportsExpired(t *testing.T) {
 	ft := &fakeTransport{statuses: []string{"expired"}}
 	_, err := RequestSignature(context.Background(), ft, SignInput{
-		Purpose: "x", Description: "x", Fingerprint: "A", Data: []byte("x"), Timeout: time.Second,
+		Purpose: "x", Description: "x", Fingerprint: "0123456789ABCDEF0123456789ABCDEF01234567", Data: []byte("x"), Timeout: time.Second,
 	})
 	if err == nil || !contains(err.Error(), "期限切れ") {
 		t.Fatalf("want expired error, got %v", err)
@@ -88,7 +94,7 @@ func TestRequestSignatureReportsExpired(t *testing.T) {
 func TestRequestSignatureTimesOut(t *testing.T) {
 	ft := &fakeTransport{statuses: []string{"pending"}}
 	_, err := RequestSignature(context.Background(), ft, SignInput{
-		Purpose: "x", Description: "x", Fingerprint: "A", Data: []byte("x"), Timeout: 20 * time.Millisecond,
+		Purpose: "x", Description: "x", Fingerprint: "0123456789ABCDEF0123456789ABCDEF01234567", Data: []byte("x"), Timeout: 20 * time.Millisecond,
 	})
 	if err == nil || !contains(err.Error(), "タイムアウト") {
 		t.Fatalf("want timeout error, got %v", err)
@@ -134,4 +140,34 @@ func contains(s, sub string) bool {
 		}
 	}
 	return false
+}
+
+func TestRequestSignatureSendsOnlyDigestForLargeData(t *testing.T) {
+	ft := &fakeTransport{statuses: []string{"pending", "signed"}}
+	data := make([]byte, smallDataLimit+1)
+	if _, err := RequestSignature(context.Background(), ft, SignInput{
+		Purpose: "makepkg", Description: "x", Fingerprint: "0123456789ABCDEF0123456789ABCDEF01234567",
+		Data: data, Timeout: time.Second,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if ft.lastCreate == nil || ft.lastCreate.DataB64 != "" {
+		t.Fatalf("大きいデータを送ってはいけません: %+v", ft.lastCreate)
+	}
+	if ft.lastCreate.DigestB64 == "" || ft.lastCreate.SigMetaB64 == "" {
+		t.Fatalf("digest と sigMeta が必要です: %+v", ft.lastCreate)
+	}
+}
+
+func TestRequestSignatureSendsSmallDataForPwaVerification(t *testing.T) {
+	ft := &fakeTransport{statuses: []string{"pending", "signed"}}
+	if _, err := RequestSignature(context.Background(), ft, SignInput{
+		Purpose: "git-commit", Description: "x", Fingerprint: "0123456789ABCDEF0123456789ABCDEF01234567",
+		Data: []byte("hello"), Timeout: time.Second,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if ft.lastCreate == nil || ft.lastCreate.DataB64 == "" {
+		t.Fatalf("小さいデータは PWA の検証用に同梱する: %+v", ft.lastCreate)
+	}
 }

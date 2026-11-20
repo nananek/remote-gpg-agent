@@ -205,7 +205,7 @@ func checkPending(h *testStack) ([]*store.Request, error) {
 }
 
 func completeRequestForTest(h *testStack, id, sig string) (bool, error) {
-	return store.CompleteRequest(context.Background(), h.server.db, id, sig)
+	return store.CompleteRequest(context.Background(), h.server.db, id, sig, "")
 }
 
 // seedKey は credential と鍵（envelope 込み）を直接入れる。mTLS の API は
@@ -272,7 +272,7 @@ func storeEnvelopesFor(t *testing.T, h *testStack, credID string) ([]protocol.En
 func createRequestFor(t *testing.T, h *testStack) string {
 	t.Helper()
 	row, err := store.CreateRequest(context.Background(), h.server.db, store.NewRequestInput{
-		Purpose: "git-commit", Description: "repos/foo", ClientName: "workstation",
+		Purpose: "git-commit", Description: "repos/foo", ClientName: "test-client",
 		KeyFingerprint: fprForTest, DataB64: "aGVsbG8=", TextMode: true,
 	}, time.Minute)
 	if err != nil {

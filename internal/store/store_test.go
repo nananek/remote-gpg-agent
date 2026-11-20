@@ -81,10 +81,10 @@ func TestRequestLifecycle(t *testing.T) {
 	if r.DataSize != 5 || !r.TextMode || r.Status != "pending" {
 		t.Fatalf("unexpected request: %+v", r)
 	}
-	if ok, err := CompleteRequest(ctx, s, r.ID, "SIG"); err != nil || !ok {
+	if ok, err := CompleteRequest(ctx, s, r.ID, "SIG", ""); err != nil || !ok {
 		t.Fatalf("complete: %v %v", ok, err)
 	}
-	if ok, _ := CompleteRequest(ctx, s, r.ID, "SIG2"); ok {
+	if ok, _ := CompleteRequest(ctx, s, r.ID, "SIG2", ""); ok {
 		t.Fatal("second complete must fail")
 	}
 	got, _ := GetRequest(ctx, s, r.ID)
@@ -115,7 +115,7 @@ func TestListPendingSkipsHandled(t *testing.T) {
 	s := mustOpen(t)
 	a, _ := CreateRequest(ctx, s, baseInput(), time.Minute)
 	CreateRequest(ctx, s, baseInput(), time.Minute)
-	if _, err := CompleteRequest(ctx, s, a.ID, "SIG"); err != nil {
+	if _, err := CompleteRequest(ctx, s, a.ID, "SIG", ""); err != nil {
 		t.Fatal(err)
 	}
 	pending, err := ListPending(ctx, s)
@@ -167,7 +167,7 @@ func TestCompleteAndDenyRejectExpiredRequest(t *testing.T) {
 		}
 		var ok bool
 		if complete {
-			ok, err = CompleteRequest(ctx, s, r.ID, "SIG")
+			ok, err = CompleteRequest(ctx, s, r.ID, "SIG", "")
 		} else {
 			ok, err = DenyRequest(ctx, s, r.ID, "no")
 		}

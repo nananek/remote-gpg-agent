@@ -7,6 +7,22 @@ const (
 	// RequestTTLSec は署名要求の既定の寿命。PWA を開いて内容を確認し、
 	// パスキーで解錠するまでの時間を確保する（15 分）。
 	RequestTTLSec = 900
+	// RequestTTLGraceSec は、client が指定した待ち時間より後に server 側の
+	// 要求を失効させるための余裕。client の timeout と同時に期限切れになる
+	// 競合を避ける。
+	RequestTTLGraceSec = 120
+	// MaxClientTimeoutSec は client が要求できる待ち時間の上限。
+	MaxClientTimeoutSec = 3600
+)
+
+// SignMode は署名要求の種類。
+//
+//	digest: client が OpenPGP の署名対象 digest を計算し、PWA はその digest に
+//	        署名する。データ本体は server に送らない（大きいファイル向け）。
+//	data:   従来どおりデータ本体を送り、PWA が OpenPGP.js で署名する。
+const (
+	SignModeDigest = "digest"
+	SignModeData   = "data"
 )
 
 // MaxDataBytes は署名対象の上限。makepkg の .pkg.tar.zst (数十 MB) を
@@ -33,18 +49,40 @@ type CreateSignRequest struct {
 	Description    string `json:"description"`
 	KeyFingerprint string `json:"keyFingerprint"`
 	TextMode       bool   `json:"textMode"`
-	DataB64        string `json:"dataB64"`
+	// Mode は "digest" か "data"。空なら data（旧 client との互換）。
+	Mode string `json:"mode,omitempty"`
+	// TimeoutSec は client が承認を待つ秒数。server はこれに余裕を足して
+	// 要求の寿命を決める。0 なら server の既定値。
+	TimeoutSec int `json:"timeoutSec,omitempty"`
+
+	// data モード用。digest モードでも、小さいデータなら PWA が内容を
+	// 検証できるように入れてよい。
+	DataB64 string `json:"dataB64,omitempty"`
+
+	// digest モード用。DigestB64 は OpenPGP の署名対象 digest（SHA-256）。
+	// SigMetaB64 は v4 signature packet の signatureData（hashed area）。
+	DigestB64  string `json:"digestB64,omitempty"`
+	SigMetaB64 string `json:"sigMetaB64,omitempty"`
+	// DataSHA256 はデータ本体の SHA-256（hex）。PWA の表示と記録用。
+	DataSHA256 string `json:"dataSha256,omitempty"`
+	DataSize   int    `json:"dataSize,omitempty"`
+	// Preview はデータ本体を送らないときの人間向け説明。
+	Preview string `json:"preview,omitempty"`
 }
 
 type CreateSignRequestResponse struct {
 	ID        string `json:"id"`
 	ExpiresAt string `json:"expiresAt"`
+	Mode      string `json:"mode"`
 }
 
 type SignResult struct {
 	Status           string `json:"status"`
+	Mode             string `json:"mode,omitempty"`
 	SignatureArmored string `json:"signatureArmored,omitempty"`
-	DeniedReason     string `json:"deniedReason,omitempty"`
+	// SignatureB64 は digest モードの raw Ed25519 署名（64 byte）。
+	SignatureB64 string `json:"signatureB64,omitempty"`
+	DeniedReason string `json:"deniedReason,omitempty"`
 }
 
 type KeyMeta struct {
@@ -87,10 +125,17 @@ type PendingSignRequest struct {
 	Description    string `json:"description"`
 	ClientName     string `json:"clientName"`
 	KeyFingerprint string `json:"keyFingerprint"`
+	Mode           string `json:"mode"`
 	DataSHA256     string `json:"dataSha256"`
 	DataSize       int    `json:"dataSize"`
-	DataB64        string `json:"dataB64"`
+	// DataPreviewB64 は一覧表示用の先頭部分だけ。本体は
+	// GET /api/v1/requests/{id}/data で承認時に取得する。
+	DataPreviewB64 string `json:"dataPreviewB64,omitempty"`
+	DataAvailable  bool   `json:"dataAvailable"`
 	TextMode       bool   `json:"textMode"`
+	DigestB64      string `json:"digestB64,omitempty"`
+	SigMetaB64     string `json:"sigMetaB64,omitempty"`
+	Preview        string `json:"preview,omitempty"`
 	CreatedAt      string `json:"createdAt"`
 	ExpiresAt      string `json:"expiresAt"`
 }

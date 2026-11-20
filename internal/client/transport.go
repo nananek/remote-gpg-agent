@@ -1,6 +1,8 @@
 package client
 
 import (
+	"bytes"
+	"context"
 	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
@@ -52,26 +54,39 @@ func New(cfg *Config) (*Client, error) {
 			return nil
 		},
 	}}
-	return &Client{base: cfg.URL, http: &http.Client{Transport: tr, Timeout: 70 * time.Second}}, nil
+	// timeout は Do の中で method ごとに決める。http.Client 全体に 70 秒を
+	// 掛けると、大きいデータのアップロードが承認待ちに入る前に切れてしまう。
+	return &Client{base: cfg.URL, http: &http.Client{Transport: tr}}, nil
 }
 
 // Do は JSON を送って JSON を受ける。out が nil なら本文は捨てる。
 func (c *Client) Do(method, path string, body any, out any) error {
-	var rdr *strings.Reader
+	var rdr *bytes.Reader
 	if body != nil {
 		raw, err := json.Marshal(body)
 		if err != nil {
 			return err
 		}
-		rdr = strings.NewReader(string(raw))
+		// strings.NewReader(string(raw)) は大きい JSON をもう一度コピーする。
+		rdr = bytes.NewReader(raw)
 	} else {
-		rdr = strings.NewReader("")
+		rdr = bytes.NewReader(nil)
 	}
 	req, err := http.NewRequest(method, c.base+path, rdr)
 	if err != nil {
 		return err
 	}
 	req.Header.Set("content-type", "application/json")
+
+	// GET は server の long-poll（50 秒）より少し長く、書き込みは
+	// 大きいデータを送れるように長めにする。
+	timeout := 10 * time.Minute
+	if method == http.MethodGet {
+		timeout = 70 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	req = req.WithContext(ctx)
 
 	resp, err := c.http.Do(req)
 	if err != nil {
