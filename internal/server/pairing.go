@@ -28,6 +28,7 @@ func (s *Server) registerPairingRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/pair/{id}", s.handlePairStatus)
 	mux.HandleFunc("GET /api/v1/pair/{id}/signal", s.handlePairListSignals)
 	mux.HandleFunc("POST /api/v1/pair/{id}/signal", s.handlePairSignal)
+	mux.HandleFunc("POST /api/v1/pair/{id}/nonce", s.handlePairNonce)
 	mux.HandleFunc("POST /api/v1/pair/{id}/complete", s.handlePairComplete)
 	mux.HandleFunc("POST /api/v1/pair/{id}/abort", s.handlePairAbort)
 }
@@ -47,9 +48,9 @@ func (s *Server) pairingFor(w http.ResponseWriter, r *http.Request) (store.Pairi
 	}
 	switch {
 	case credID == p.CreatorCred:
-		return p, "creator", true
+		return p, protocol.PairingRoleCreator, true
 	case p.JoinerCred != "" && credID == p.JoinerCred:
-		return p, "joiner", true
+		return p, protocol.PairingRoleJoiner, true
 	}
 	writeError(w, http.StatusForbidden, "not a pairing participant")
 	return store.Pairing{}, "", false
@@ -183,6 +184,10 @@ func (s *Server) handlePairSignal(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "unknown signal kind")
 		return
 	}
+	if !protocol.PairingSignalAllowedFor(role, in.Kind) {
+		writeError(w, http.StatusBadRequest, "signal kind does not match the sender's role")
+		return
+	}
 	raw, err := cryptoutil.B64URLDecode(in.Blob)
 	if err != nil || len(raw) == 0 || len(raw) > protocol.MaxPairingSignalBytes {
 		writeError(w, http.StatusBadRequest, "signal blob is empty or too large")
@@ -228,12 +233,43 @@ func (s *Server) handlePairListSignals(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, protocol.PairingSignalsResponse{Signals: signals})
 }
 
+// handlePairNonce は作成側が転送ごとの nonce を登録する。参加側はこれを
+// 完了通知に含めるので、転送前に成功を偽装できない。
+func (s *Server) handlePairNonce(w http.ResponseWriter, r *http.Request) {
+	p, role, ok := s.pairingFor(w, r)
+	if !ok {
+		return
+	}
+	if role != protocol.PairingRoleCreator {
+		writeError(w, http.StatusForbidden, "only the creating device can register the nonce")
+		return
+	}
+	var in protocol.PairingNonceRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<12)).Decode(&in); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid json")
+		return
+	}
+	if !b64urlExact(in.Nonce, 16) {
+		writeError(w, http.StatusBadRequest, "nonce must be 16 bytes of base64url")
+		return
+	}
+	if err := store.SetTransferNonce(r.Context(), s.db, p.ID, p.CreatorCred, in.Nonce, time.Now()); err != nil {
+		if errors.Is(err, store.ErrPairingState) || errors.Is(err, store.ErrNotFound) {
+			writeError(w, http.StatusConflict, "pairing is no longer open")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
 func (s *Server) handlePairComplete(w http.ResponseWriter, r *http.Request) {
 	p, role, ok := s.pairingFor(w, r)
 	if !ok {
 		return
 	}
-	if role != "joiner" {
+	if role != protocol.PairingRoleJoiner {
 		writeError(w, http.StatusForbidden, "only the joining device can complete")
 		return
 	}
@@ -246,8 +282,12 @@ func (s *Server) handlePairComplete(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "receipt has an implausible length")
 		return
 	}
-	if err := store.SetReceipt(r.Context(), s.db, p.ID, p.JoinerCred, in.Receipt); err != nil {
-		if errors.Is(err, store.ErrPairingState) || errors.Is(err, store.ErrNotFound) {
+	if err := store.SetReceipt(r.Context(), s.db, p.ID, p.JoinerCred, in.Receipt, in.Nonce); err != nil {
+		switch {
+		case errors.Is(err, store.ErrPairingProof):
+			writeError(w, http.StatusBadRequest, "nonce does not match the transfer")
+			return
+		case errors.Is(err, store.ErrPairingState), errors.Is(err, store.ErrNotFound):
 			writeError(w, http.StatusConflict, "pairing is no longer open")
 			return
 		}

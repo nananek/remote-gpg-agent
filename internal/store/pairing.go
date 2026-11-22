@@ -3,6 +3,7 @@ package store
 import (
 	"bytes"
 	"context"
+	"crypto/subtle"
 	"encoding/binary"
 	"errors"
 	"time"
@@ -16,6 +17,7 @@ var (
 	ErrPairingExists = errors.New("pairing already exists")
 	ErrPairingState  = errors.New("pairing is in the wrong state")
 	ErrPairingFull   = errors.New("pairing has no room for more signals")
+	ErrPairingProof  = errors.New("pairing proof does not match")
 )
 
 // Pairing は端末追加の 1 セッション。参加側の credential は登録が完了する
@@ -27,11 +29,14 @@ type Pairing struct {
 	JoinerLabel string `json:"joinerLabel,omitempty"`
 	State       string `json:"state"`
 	JoinProof   string `json:"joinProof"`
-	Receipt     string `json:"receipt,omitempty"`
-	NextSeq     int64  `json:"nextSeq"`
-	SignalBytes int    `json:"signalBytes"`
-	CreatedAt   string `json:"createdAt"`
-	ExpiresAt   string `json:"expiresAt"`
+	// TransferNonce は作成側が転送直前に登録する値。参加側の完了通知が
+	// この転送に対するものだと確かめるために使う。
+	TransferNonce string `json:"transferNonce,omitempty"`
+	Receipt       string `json:"receipt,omitempty"`
+	NextSeq       int64  `json:"nextSeq"`
+	SignalBytes   int    `json:"signalBytes"`
+	CreatedAt     string `json:"createdAt"`
+	ExpiresAt     string `json:"expiresAt"`
 }
 
 func pairingExpired(p Pairing, now time.Time) bool {
@@ -168,8 +173,31 @@ func ListSignals(_ context.Context, s *Store, id string, after int64) ([]protoco
 	return out, err
 }
 
+// SetTransferNonce は作成側が転送ごとの nonce を登録する。
+func SetTransferNonce(_ context.Context, s *Store, id, credID, nonce string, now time.Time) error {
+	return s.Update(func(tx *bolt.Tx) error {
+		b := tx.Bucket(bPair)
+		var p Pairing
+		if err := getJSON(b, []byte(id), &p); err != nil {
+			return ErrNotFound
+		}
+		if pairingExpired(p, now) {
+			return ErrNotFound
+		}
+		if p.State != protocol.PairingJoined || p.CreatorCred != credID {
+			return ErrPairingState
+		}
+		if p.TransferNonce != "" && p.TransferNonce != nonce {
+			return ErrPairingState
+		}
+		p.TransferNonce = nonce
+		return putJSON(b, []byte(id), p)
+	})
+}
+
 // SetReceipt は参加側が「封印してアップロードできた鍵の一覧」を預ける。
-func SetReceipt(_ context.Context, s *Store, id, credID, receipt string) error {
+// 転送ごとの nonce が一致しない完了通知は受け付けない。
+func SetReceipt(_ context.Context, s *Store, id, credID, receipt, nonce string) error {
 	now := time.Now().UTC()
 	return s.Update(func(tx *bolt.Tx) error {
 		b := tx.Bucket(bPair)
@@ -185,6 +213,12 @@ func SetReceipt(_ context.Context, s *Store, id, credID, receipt string) error {
 		}
 		if p.State != protocol.PairingJoined && p.State != protocol.PairingDelivered {
 			return ErrPairingState
+		}
+		if p.TransferNonce == "" {
+			return ErrPairingState
+		}
+		if subtle.ConstantTimeCompare([]byte(p.TransferNonce), []byte(nonce)) != 1 {
+			return ErrPairingProof
 		}
 		p.Receipt = receipt
 		p.State = protocol.PairingDelivered

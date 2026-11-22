@@ -182,6 +182,11 @@ export async function sendToNewDevice(hooks: SendHooks, signal: AbortSignal): Pr
     throw new Error('転送を中止しました');
   }
 
+  // 完了通知をこの転送に束縛する。参加側は鍵と一緒に受け取った nonce を
+  // 返すので、転送前に「成功した」という控えを先に置けない。
+  const transferNonce = b64url(crypto.getRandomValues(new Uint8Array(16)));
+  await api.pairNonce(pairingId, transferNonce);
+
   hooks.onStatus('接続しています（同じ Wi-Fi か確認してください）');
   const { peer, channel, pump } = await openChannel({
     role: 'creator',
@@ -193,8 +198,9 @@ export async function sendToNewDevice(hooks: SendHooks, signal: AbortSignal): Pr
   });
 
   try {
-    const payload: { v: number; keys: PairingKeyPayload[] } = {
+    const payload: { v: number; nonce: string; keys: PairingKeyPayload[] } = {
       v: 1,
+      nonce: transferNonce,
       keys: keys.map((k) => ({
         fingerprint: k.fingerprint,
         label: k.label,
@@ -217,7 +223,7 @@ export async function sendToNewDevice(hooks: SendHooks, signal: AbortSignal): Pr
       if (!stored) throw err;
       receipt = stored;
     }
-    verifyReceipt(receipt, keys);
+    verifyReceipt(receipt, keys, transferNonce);
     hooks.onDone(keys);
   } finally {
     pump.stop();
@@ -234,14 +240,16 @@ async function waitForStoredReceipt(pairingId: string): Promise<string | null> {
   return null;
 }
 
-function verifyReceipt(receipt: string, keys: UnlockedKey[]): void {
-  let parsed: { v?: number; keys?: { keyId?: string }[] };
+function verifyReceipt(receipt: string, keys: UnlockedKey[], nonce: string): void {
+  let parsed: { v?: number; nonce?: string; keys?: { keyId?: string }[] };
   try {
-    parsed = JSON.parse(receipt) as { v?: number; keys?: { keyId?: string }[] };
+    parsed = JSON.parse(receipt) as { v?: number; nonce?: string; keys?: { keyId?: string }[] };
   } catch {
     throw new Error('受領書を読めませんでした');
   }
   if (parsed.v !== 1 || !Array.isArray(parsed.keys)) throw new Error('受領書の形式が不正です');
+  // この転送の nonce を含まない受領書は、事前に置かれた偽の成功かもしれない。
+  if (parsed.nonce !== nonce) throw new Error('受領書がこの転送のものではありません');
   const want = keys.map((k) => k.fingerprint.slice(-16).toUpperCase()).sort();
   const got = parsed.keys.map((k) => String(k.keyId ?? '').toUpperCase()).sort();
   if (want.length !== got.length || want.some((id, i) => id !== got[i])) {
@@ -300,8 +308,14 @@ export async function receiveFromNewDevice(
 
   try {
     const raw = await waitForMessage(peer, channel, PAIR_FRAME_KEYS, 60_000, signal);
-    const payload = JSON.parse(dec.decode(raw)) as { v?: number; keys?: PairingKeyPayload[] };
-    if (payload.v !== 1 || !Array.isArray(payload.keys) || payload.keys.length === 0) {
+    const payload = JSON.parse(dec.decode(raw)) as { v?: number; nonce?: string; keys?: PairingKeyPayload[] };
+    if (
+      payload.v !== 1 ||
+      typeof payload.nonce !== 'string' ||
+      !/^[A-Za-z0-9_-]{22}$/.test(payload.nonce) ||
+      !Array.isArray(payload.keys) ||
+      payload.keys.length === 0
+    ) {
       throw new Error('受信した鍵の形式が不正です');
     }
     hooks.onStatus('鍵をこの端末のパスキーで封印しています');
@@ -311,11 +325,11 @@ export async function receiveFromNewDevice(
     for (const sealed of result.sealed) {
       receiptKeys.push({ keyId: sealed.keyId, sha256: await sha256Hex(unb64(sealed.ciphertextB64)) });
     }
-    const receipt = JSON.stringify({ v: 1, keys: receiptKeys });
+    const receipt = JSON.stringify({ v: 1, nonce: payload.nonce, keys: receiptKeys });
     const encodedReceipt = b64url(enc.encode(receipt));
 
     // 先にサーバへ控えを置く。チャネルが切れても解錠側が完了を確認できる。
-    await api.pairComplete(pairingId, { receipt: encodedReceipt });
+    await api.pairComplete(pairingId, { receipt: encodedReceipt, nonce: payload.nonce });
     for (const frame of await channel.encode(PAIR_FRAME_RECEIPT, enc.encode(receipt))) {
       await peer.send(frame);
     }

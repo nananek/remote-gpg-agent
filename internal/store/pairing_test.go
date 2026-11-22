@@ -57,10 +57,19 @@ func TestPairingSignalsRoundTrip(t *testing.T) {
 		t.Fatalf("after=1 returned %+v", after)
 	}
 
-	if err := SetReceipt(ctx, s, id, "cred-a", "receipt"); !errors.Is(err, ErrPairingState) {
+	if err := SetTransferNonce(ctx, s, id, "cred-b", "nonce", time.Now()); !errors.Is(err, ErrPairingState) {
+		t.Fatalf("only the creator may register the nonce, got %v", err)
+	}
+	if err := SetTransferNonce(ctx, s, id, "cred-a", "nonce", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if err := SetReceipt(ctx, s, id, "cred-a", "receipt", "nonce"); !errors.Is(err, ErrPairingState) {
 		t.Fatalf("only the joiner may complete, got %v", err)
 	}
-	if err := SetReceipt(ctx, s, id, "cred-b", "receipt"); err != nil {
+	if err := SetReceipt(ctx, s, id, "cred-b", "receipt", "other"); !errors.Is(err, ErrPairingProof) {
+		t.Fatalf("a receipt for another transfer must be rejected, got %v", err)
+	}
+	if err := SetReceipt(ctx, s, id, "cred-b", "receipt", "nonce"); err != nil {
 		t.Fatal(err)
 	}
 	p, err := GetPairing(ctx, s, id)

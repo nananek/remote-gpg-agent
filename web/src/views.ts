@@ -433,6 +433,7 @@ export function renderPairingConfirm(params: {
       <p class="meta">${escapeHtml(params.label)} が接続しました。</p>
       <p class="meta">この端末の署名鍵（秘密鍵）を渡します。</p>
       ${pairKeyList(params.keys)}
+      <p class="meta warn">このコードは QR を見た相手にも計算できます。認証の代わりにはなりません。心当たりのない接続は中止してください。</p>
       <p class="meta warn">渡した鍵は、相手端末のパスキーで開ける形で保存されます。取り消すには GPG 鍵のローテーションが必要です。</p>
       <button class="primary" id="pair-send">鍵を渡す</button>
       <button class="quiet" id="pair-cancel">中止する</button>

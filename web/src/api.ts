@@ -149,7 +149,10 @@ export const api = {
   pairSignals: (pairingId: string, after: number) =>
     call<{ signals: PairingSignal[] }>('GET', `/api/v1/pair/${pairingId}/signal?after=${after}`),
 
-  pairComplete: (pairingId: string, body: { receipt: string }) =>
+  pairNonce: (pairingId: string, nonce: string) =>
+    call<{ ok: boolean }>('POST', `/api/v1/pair/${pairingId}/nonce`, { nonce }),
+
+  pairComplete: (pairingId: string, body: { receipt: string; nonce: string }) =>
     call<{ state: string }>('POST', `/api/v1/pair/${pairingId}/complete`, body),
 
   pairAbort: (pairingId: string) =>

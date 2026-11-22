@@ -87,6 +87,32 @@ type PairingSignalsResponse struct {
 
 type PairingCompleteRequest struct {
 	Receipt string `json:"receipt"`
+	// Nonce は作成側が転送の直前に登録した値。参加側はこれをそのまま返す。
+	Nonce string `json:"nonce"`
+}
+
+type PairingNonceRequest struct {
+	Nonce string `json:"nonce"`
+}
+
+const (
+	PairingRoleCreator = "creator"
+	PairingRoleJoiner  = "joiner"
+)
+
+// PairingSignalAllowedFor はロールと種類の対応を返す。offer は作成側、
+// answer は参加側だけが送れる。ロールを取り違えた要求を通すと、相手の
+// シグナリング枠を占有できてしまう。
+func PairingSignalAllowedFor(role, kind string) bool {
+	switch kind {
+	case PairingSignalCandidate:
+		return true
+	case PairingSignalOffer:
+		return role == PairingRoleCreator
+	case PairingSignalAnswer:
+		return role == PairingRoleJoiner
+	}
+	return false
 }
 
 // ValidPairingSignalKind は中継してよい種類か。クライアントが勝手に

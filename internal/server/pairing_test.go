@@ -164,14 +164,27 @@ func TestPairFlowRegistersJoinerAndCarriesReceipt(t *testing.T) {
 		t.Fatalf("third party must be rejected, got %d", resp.StatusCode)
 	}
 
-	// 受領書は参加側だけが書ける。
+	// 転送ごとの nonce は作成側だけが登録できる。
+	nonce := cryptoutil.B64URL(bytes.Repeat([]byte{0x55}, 16))
+	resp, _ = pwaPost(t, joiner, h.webURL("/api/v1/pair/"+id+"/nonce"),
+		map[string]string{"nonce": nonce}, nil)
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("joiner must not register the nonce, got %d", resp.StatusCode)
+	}
+	resp, _ = pwaPost(t, creator, h.webURL("/api/v1/pair/"+id+"/nonce"),
+		map[string]string{"nonce": nonce}, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("nonce: %d", resp.StatusCode)
+	}
+
+	// 受領書は参加側だけが、この転送の nonce 付きで書ける。
 	resp, _ = pwaPost(t, creator, h.webURL("/api/v1/pair/"+id+"/complete"),
-		map[string]string{"receipt": "forged"}, nil)
+		map[string]string{"receipt": "forged", "nonce": nonce}, nil)
 	if resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("creator must not complete, got %d", resp.StatusCode)
 	}
 	resp, _ = pwaPost(t, joiner, h.webURL("/api/v1/pair/"+id+"/complete"),
-		map[string]string{"receipt": "receipt-v1"}, nil)
+		map[string]string{"receipt": "receipt-v1", "nonce": nonce}, nil)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("complete: %d", resp.StatusCode)
 	}
