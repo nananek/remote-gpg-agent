@@ -50,6 +50,27 @@ func (s *Server) registerAuthRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/auth/me", s.handleMe)
 }
 
+func (s *Server) registrationOptions(u userRecord) (*protocol.CredentialCreation, *webauthn.SessionData, error) {
+	excl := make([]protocol.CredentialDescriptor, 0, len(u.creds))
+	for _, c := range u.creds {
+		excl = append(excl, protocol.CredentialDescriptor{Type: "public-key", CredentialID: c.ID})
+	}
+	return s.wa.BeginRegistration(u,
+		webauthn.WithConveyancePreference(protocol.PreferNoAttestation),
+		webauthn.WithAuthenticatorSelection(protocol.AuthenticatorSelection{
+			ResidentKey:      protocol.ResidentKeyRequirementRequired,
+			UserVerification: protocol.VerificationRequired,
+		}),
+		webauthn.WithExclusions(excl),
+		// PRF が使えるかを登録時に問い、さらに salt を渡して評価させる。
+		// salt を渡さないと認証器は PRF 出力を返さず、封印鍵を作れない。
+		webauthn.WithExtensions(
+			webauthn.WithExtensionPRFSupport(),
+			webauthn.WithExtensionPRF(protocol.PRFValues{First: protocol.URLEncodedBase64(PRFSalt)}),
+		),
+	)
+}
+
 func (s *Server) handleRegisterOptions(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	recs, err := store.ListCredentials(ctx, s.db)
@@ -78,25 +99,7 @@ func (s *Server) handleRegisterOptions(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	excl := make([]protocol.CredentialDescriptor, 0, len(u.creds))
-	for _, c := range u.creds {
-		excl = append(excl, protocol.CredentialDescriptor{Type: "public-key", CredentialID: c.ID})
-	}
-
-	creation, session, err := s.wa.BeginRegistration(u,
-		webauthn.WithConveyancePreference(protocol.PreferNoAttestation),
-		webauthn.WithAuthenticatorSelection(protocol.AuthenticatorSelection{
-			ResidentKey:      protocol.ResidentKeyRequirementRequired,
-			UserVerification: protocol.VerificationRequired,
-		}),
-		webauthn.WithExclusions(excl),
-		// PRF が使えるかを登録時に問い、さらに salt を渡して評価させる。
-		// salt を渡さないと認証器は PRF 出力を返さず、封印鍵を作れない。
-		webauthn.WithExtensions(
-			webauthn.WithExtensionPRFSupport(),
-			webauthn.WithExtensionPRF(protocol.PRFValues{First: protocol.URLEncodedBase64(PRFSalt)}),
-		),
-	)
+	creation, session, err := s.registrationOptions(u)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -119,6 +122,8 @@ type registerVerifyBody struct {
 	Response   json.RawMessage           `json:"response"`
 	Label      string                    `json:"label"`
 	Envelopes  []rgaproto.SealedEnvelope `json:"envelopes"`
+	// PairingID は端末追加（未認証の参加側）の登録にだけ入る。
+	PairingID string `json:"pairingId,omitempty"`
 }
 
 func (s *Server) handleRegisterVerify(w http.ResponseWriter, r *http.Request) {
@@ -128,13 +133,34 @@ func (s *Server) handleRegisterVerify(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid json")
 		return
 	}
-	raw, err := store.TakeChallenge(ctx, s.db, body.CeremonyID, "register")
+	kind := "register"
+	if body.PairingID != "" {
+		kind = "pair"
+	}
+	raw, err := store.TakeChallenge(ctx, s.db, body.CeremonyID, kind)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "unknown or expired challenge")
 		return
 	}
 	var session webauthn.SessionData
-	if err := json.Unmarshal(raw, &session); err != nil {
+	pairingID := ""
+	if kind == "pair" {
+		var pc pairChallenge
+		if err := json.Unmarshal(raw, &pc); err != nil {
+			writeError(w, http.StatusBadRequest, "corrupt challenge")
+			return
+		}
+		if pc.PairingID != body.PairingID {
+			writeError(w, http.StatusBadRequest, "pairingId does not match the challenge")
+			return
+		}
+		if _, err := store.GetPairing(ctx, s.db, pc.PairingID); err != nil {
+			writeError(w, http.StatusBadRequest, "unknown or expired pairing")
+			return
+		}
+		pairingID = pc.PairingID
+		session = pc.Session
+	} else if err := json.Unmarshal(raw, &session); err != nil {
 		writeError(w, http.StatusBadRequest, "corrupt challenge")
 		return
 	}
@@ -155,7 +181,7 @@ func (s *Server) handleRegisterVerify(w http.ResponseWriter, r *http.Request) {
 	}
 	if cred.Extensions.PRFEnabled == nil || !*cred.Extensions.PRFEnabled {
 		writeError(w, http.StatusBadRequest,
-			"この認証器は PRF 非対応です（iOS 18.4+ / iCloud キーチェーンのパスキーが必要）")
+			"この認証器は PRF 非対応です（iOS 18.4+ の iCloud キーチェーン、または Chrome の Google パスワード マネージャーが必要）")
 		return
 	}
 
@@ -165,7 +191,13 @@ func (s *Server) handleRegisterVerify(w http.ResponseWriter, r *http.Request) {
 		label = fmt.Sprintf("パスキー %d", len(u.creds)+1)
 	}
 
-	if curCred, sessErr := s.sessionCredential(r); sessErr == nil {
+	if pairingID != "" {
+		// 参加側の最初のパスキー。鍵はまだ 1 つも渡っていないので envelope は無い。
+		if len(body.Envelopes) != 0 {
+			writeError(w, http.StatusBadRequest, "the first passkey must not carry envelopes")
+			return
+		}
+	} else if curCred, sessErr := s.sessionCredential(r); sessErr == nil {
 		// 追加パスキー: いま解錠中の鍵を全て再封印してもらう。
 		required, err := store.KeyIDsForCredential(ctx, s.db, curCred)
 		if err != nil {
@@ -216,6 +248,15 @@ func (s *Server) handleRegisterVerify(w http.ResponseWriter, r *http.Request) {
 	}); err != nil {
 		writeError(w, http.StatusConflict, err.Error())
 		return
+	}
+	if pairingID != "" {
+		if err := store.AttachJoiner(ctx, s.db, pairingID, credID, label); err != nil {
+			// 参加枠が既に埋まっている（QR の盗用など）。鍵を持たない
+			// credential を残さないよう、登録ごと取り消す。
+			_ = store.DeleteCredential(ctx, s.db, credID)
+			writeError(w, http.StatusConflict, "pairing is no longer available")
+			return
+		}
 	}
 	for _, e := range body.Envelopes {
 		if err := store.AttachEnvelope(ctx, s.db, rgaproto.Envelope{

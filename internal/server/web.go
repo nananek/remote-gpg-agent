@@ -23,6 +23,7 @@ func (s *Server) webHandler() http.Handler {
 	s.registerAuthRoutes(mux)
 	s.registerVaultRoutes(mux)
 	s.registerPwaRequestRoutes(mux)
+	s.registerPairingRoutes(mux)
 
 	dist, err := fs.Sub(webdist.FS, "dist")
 	if err != nil {

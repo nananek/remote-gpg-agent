@@ -272,6 +272,7 @@ export function renderSettings(params: {
   keys: UnlockedKey[];
   onBack: () => void;
   onAddPasskey: (label: string) => void;
+  onAddDevice: () => void;
   onAddKey: (v: { label: string; name: string; email: string }) => void;
   onCopyPublicKey: (fingerprint: string) => void;
   onBackup: (fingerprint: string, passphrase: string) => void;
@@ -327,6 +328,11 @@ export function renderSettings(params: {
       <button id="add-passkey">パスキーを追加</button>
     </div>
     <div class="card">
+      <h2>端末を追加</h2>
+      <p class="meta">Android など別のプラットフォームの端末に、いま解錠中の鍵を直接渡します。同じ Wi-Fi に接続した 2 台で行ってください。</p>
+      <button id="add-device">QR を表示して追加</button>
+    </div>
+    <div class="card">
       <h2>鍵を追加</h2>
       <label for="key-label">ラベル</label>
       <input id="key-label" value="arch-pkg" />
@@ -363,6 +369,7 @@ export function renderSettings(params: {
   document.querySelector<HTMLButtonElement>('#discord-test')?.addEventListener('click', params.onTestDiscord);
   document.querySelector<HTMLButtonElement>('#sound-toggle')?.addEventListener('click', params.onToggleSound);
   btn('add-passkey').addEventListener('click', () => params.onAddPasskey(val('passkey-label') || '予備のパスキー'));
+  btn('add-device').addEventListener('click', params.onAddDevice);
   btn('add-key').addEventListener('click', () =>
     params.onAddKey({ label: val('key-label') || 'key2', name: val('key-name'), email: val('key-email') }));
   btn('restore').addEventListener('click', () =>
@@ -373,4 +380,104 @@ export function renderSettings(params: {
     b.addEventListener('click', () => params.onBackup(b.dataset.backup!, val('pass-' + b.dataset.backup))));
   root().querySelectorAll<HTMLButtonElement>('[data-public]').forEach((b) =>
     b.addEventListener('click', () => params.onCopyPublicKey(b.dataset.public!)));
+}
+
+function pairKeyList(keys: UnlockedKey[]): string {
+  const rows = keys
+    .map(
+      (k) => `<li><span>${escapeHtml(k.label)}</span><code>${escapeHtml(k.fingerprint.slice(-16))}</code></li>`,
+    )
+    .join('');
+  return `<ul class="pair-keys">${rows}</ul>`;
+}
+
+function pairExpiry(iso: string): string {
+  const t = Date.parse(iso);
+  if (!Number.isFinite(t)) return iso;
+  return new Date(t).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' });
+}
+
+/** 送信側: QR を表示して相手の接続を待つ。 */
+export function renderPairingQR(params: {
+  qrSvg: string;
+  keys: UnlockedKey[];
+  expiresAt: string;
+  onCancel: () => void;
+}): void {
+  root().innerHTML = `
+    ${header('端末を追加', '新しい端末のカメラでこの QR を読み取ってください。')}
+    <div class="card pair">
+      <div class="qr">${params.qrSvg}</div>
+      <p class="meta">有効期限: ${escapeHtml(pairExpiry(params.expiresAt))}。この画面を閉じると中断します。</p>
+      <p class="meta">渡す鍵: ${params.keys.length} 個</p>
+      ${pairKeyList(params.keys)}
+      <p class="meta warn">同じ Wi-Fi に接続した 2 台で行ってください。モバイル回線では接続できません。</p>
+      <button class="quiet" id="pair-cancel">中止する</button>
+      <p class="error" id="err"></p>
+    </div>`;
+  root().querySelector<HTMLButtonElement>('#pair-cancel')!.addEventListener('click', params.onCancel);
+}
+
+/** 送信側: 接続してきた端末を確認し、鍵を渡す最終承認を取る。 */
+export function renderPairingConfirm(params: {
+  label: string;
+  code: string;
+  keys: UnlockedKey[];
+  onConfirm: () => void;
+  onCancel: () => void;
+}): void {
+  root().innerHTML = `
+    ${header('接続を確認', '新しい端末に同じ 6 桁のコードが出ていることを確かめてください。')}
+    <div class="card">
+      <p class="pair-code">${escapeHtml(params.code)}</p>
+      <p class="meta">${escapeHtml(params.label)} が接続しました。</p>
+      <p class="meta">この端末の署名鍵（秘密鍵）を渡します。</p>
+      ${pairKeyList(params.keys)}
+      <p class="meta warn">このコードは QR を見た相手にも計算できます。認証の代わりにはなりません。心当たりのない接続は中止してください。</p>
+      <p class="meta warn">渡した鍵は、相手端末のパスキーで開ける形で保存されます。取り消すには GPG 鍵のローテーションが必要です。</p>
+      <button class="primary" id="pair-send">鍵を渡す</button>
+      <button class="quiet" id="pair-cancel">中止する</button>
+      <p class="error" id="err"></p>
+    </div>`;
+  root().querySelector<HTMLButtonElement>('#pair-send')!.addEventListener('click', params.onConfirm);
+  root().querySelector<HTMLButtonElement>('#pair-cancel')!.addEventListener('click', params.onCancel);
+}
+
+/** 受信側: パスキー作成中・接続中の待機画面。コードが出たら大きく見せる。 */
+export function renderPairingWait(params: { title: string; lead: string; code?: string }): void {
+  root().innerHTML = `
+    ${header(params.title, params.lead)}
+    <div class="card">
+      ${params.code ? `<p class="pair-code">${escapeHtml(params.code)}</p><p class="meta">解錠中の端末と同じコードか確認してください。</p>` : ''}
+      <p class="meta">両方の画面を開いたままにしてください。</p>
+      <p class="error" id="err"></p>
+    </div>`;
+}
+
+export function renderPairingDone(params: { keys: UnlockedKey[]; onClose: () => void }): void {
+  root().innerHTML = `
+    ${header('追加しました', `${params.keys.length} 個の鍵をこの端末でも使えるようにしました。`)}
+    <div class="card">
+      ${pairKeyList(params.keys)}
+      <p class="meta">次回からは、この端末のパスキーで解錠できます。</p>
+      <button class="primary" id="pair-close">閉じる</button>
+    </div>`;
+  root().querySelector<HTMLButtonElement>('#pair-close')!.addEventListener('click', params.onClose);
+}
+
+export function renderPairingError(params: {
+  message: string;
+  onRetry?: () => void;
+  onClose: () => void;
+}): void {
+  root().innerHTML = `
+    ${header('追加できませんでした')}
+    <div class="card">
+      <p class="error">${escapeHtml(params.message)}</p>
+      <p class="meta">同じ Wi-Fi に接続し、両方の画面を開いたまま、もう一度 QR からやり直してください。</p>
+      ${params.onRetry ? '<button class="primary" id="pair-retry">もう一度</button>' : ''}
+      <button class="quiet" id="pair-close">閉じる</button>
+    </div>`;
+  root().querySelector<HTMLButtonElement>('#pair-retry')?.addEventListener('click', params.onRetry!);
+  root().querySelector<HTMLButtonElement>('#pair-close')!.addEventListener('click', params.onClose);
 }

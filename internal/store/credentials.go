@@ -56,3 +56,11 @@ func UpdateCredentialRecord(_ context.Context, s *Store, c CredentialRecord) err
 		return putJSON(tx.Bucket(bCreds), []byte(c.CredentialID), c)
 	})
 }
+
+// DeleteCredential は登録の後始末に使う。ペアリングの確定に失敗したとき、
+// 鍵を 1 つも持たない credential を残さないために消す。
+func DeleteCredential(_ context.Context, s *Store, id string) error {
+	return s.Update(func(tx *bolt.Tx) error {
+		return tx.Bucket(bCreds).Delete([]byte(id))
+	})
+}

@@ -13,6 +13,7 @@ import (
 
 	"github.com/go-webauthn/webauthn/webauthn"
 
+	"github.com/nananek/remote-gpg-agent/internal/protocol"
 	"github.com/nananek/remote-gpg-agent/internal/store"
 )
 
@@ -24,6 +25,7 @@ type Server struct {
 	vapid           vapidKeys
 	loginLimiter    *tokenBucket
 	registerLimiter *tokenBucket
+	pairLimiter     *tokenBucket
 }
 
 func New(cfg *Config, log *slog.Logger) (*Server, error) {
@@ -43,11 +45,15 @@ func New(cfg *Config, log *slog.Logger) (*Server, error) {
 	if log == nil {
 		log = slog.New(slog.NewTextHandler(os.Stderr, nil))
 	}
+	if cfg.PairingTTL <= 0 {
+		cfg.PairingTTL = protocol.PairingTTL
+	}
 	return &Server{
 		cfg: cfg, db: db, wa: wa, log: log,
 		vapid:           vapidKeys{subject: cfg.VAPIDSubject, public: cfg.VAPIDPublic, private: cfg.VAPIDPrivate},
 		loginLimiter:    newTokenBucket(60, 60),
 		registerLimiter: newTokenBucket(30, 30),
+		pairLimiter:     newTokenBucket(20, 5),
 	}, nil
 }
 

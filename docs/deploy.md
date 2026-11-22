@@ -101,6 +101,8 @@ RGA_BOOTSTRAP_TOKEN=...
 # 任意: 署名要求の寿命の下限（秒）。既定 900（15 分）。
 # client が timeoutSec を送ると、server は timeoutSec + 120 秒を寿命にする。
 # RGA_REQUEST_TTL_SEC=900
+# 任意: 端末追加（QR + WebRTC）の pairing の寿命（秒）。既定 120。
+# RGA_PAIRING_TTL_SEC=120
 ```
 
 VAPID 鍵とブートストラップトークンは生成する:

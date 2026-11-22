@@ -6,12 +6,19 @@ import {
   busy,
   clearError,
   renderApprove,
+  renderPairingConfirm,
+  renderPairingDone,
+  renderPairingError,
+  renderPairingQR,
+  renderPairingWait,
   renderSettings,
   renderSetup,
   renderUnlock,
   root,
   setError,
 } from './views';
+import { parsePairHash, receiveFromNewDevice, sendToNewDevice } from './pairing/flow';
+import { renderQrSvg } from './pairing/qr';
 import { pushPermission, subscribePush, testPush, unsubscribePush } from './push';
 import { playRequestChime, primeSound, setSoundEnabled, soundEnabled } from './sound';
 
@@ -114,6 +121,7 @@ async function showSettings(): Promise<void> {
           setError((err as Error).message);
         });
     },
+    onAddDevice: () => void startPairing(),
     onAddKey: (v) => {
       busy('鍵を生成しています');
       flows
@@ -221,7 +229,89 @@ async function deliver(filename: string, text: string): Promise<void> {
   setTimeout(() => URL.revokeObjectURL(url), 10_000);
 }
 
+/**
+ * 端末追加の送信側。QR を出し、相手が接続してきたらコードを突き合わせてから
+ * DataChannel で鍵を渡す。サーバは SDP / ICE しか見ない。
+ */
+async function startPairing(): Promise<void> {
+  stopPolling();
+  const controller = new AbortController();
+  try {
+    await sendToNewDevice(
+      {
+        onQr: (url, expiresAt, keys) =>
+          renderPairingQR({
+            qrSvg: renderQrSvg(url),
+            keys,
+            expiresAt,
+            onCancel: () => controller.abort(),
+          }),
+        onJoined: (label, code) =>
+          new Promise<boolean>((resolve) => {
+            renderPairingConfirm({
+              label,
+              code,
+              keys: state.keys,
+              onConfirm: () => resolve(true),
+              onCancel: () => resolve(false),
+            });
+          }),
+        onStatus: (lead) => renderPairingWait({ title: '端末を追加', lead }),
+        onDone: (keys) =>
+          renderPairingDone({ keys, onClose: () => void refresh().then(startPolling) }),
+      },
+      controller.signal,
+    );
+  } catch (err) {
+    const message = (err as Error).message;
+    if (message === '中止しました' || message === '転送を中止しました') {
+      void refresh().then(startPolling);
+      return;
+    }
+    renderPairingError({
+      message,
+      onRetry: () => void startPairing(),
+      onClose: () => void refresh().then(startPolling),
+    });
+  }
+}
+
+/** 端末追加の受信側。QR の秘密は URL のフラグメントからだけ読む。 */
+async function joinPairing(pair: { pairingId: string; secret: Uint8Array }): Promise<void> {
+  let code = '';
+  const render = (lead: string): void => renderPairingWait({ title: '端末を追加', lead, code });
+  render('この端末を登録しています');
+  const close = (): void => {
+    if (state.unlocked) void refresh().then(startPolling);
+    else location.replace(location.pathname);
+  };
+  try {
+    await receiveFromNewDevice(
+      pair.pairingId,
+      pair.secret,
+      {
+        onStatus: render,
+        onCode: (c) => {
+          code = c;
+          render('解錠中の端末と同じコードか確認してください');
+        },
+        onDone: (keys) => renderPairingDone({ keys, onClose: close }),
+      },
+      new AbortController().signal,
+    );
+  } catch (err) {
+    renderPairingError({ message: (err as Error).message, onClose: close });
+  }
+}
+
 async function boot(): Promise<void> {
+  const pair = parsePairHash(location.hash);
+  if (pair) {
+    // QR の秘密を URL 履歴に残さない（サーバには元から送られない）。
+    history.replaceState(null, '', location.pathname + location.search);
+    void joinPairing(pair);
+    return;
+  }
   try {
     const me = await api.me();
     if (me.credentialCount === 0) {

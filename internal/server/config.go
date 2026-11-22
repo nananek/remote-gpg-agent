@@ -30,6 +30,7 @@ type Config struct {
 	PollInterval   time.Duration
 	PollDeadline   time.Duration
 	RequestTTL     time.Duration
+	PairingTTL     time.Duration
 }
 
 func Load() (*Config, error) {
@@ -57,10 +58,16 @@ func Load() (*Config, error) {
 		PollInterval:   time.Second,
 		PollDeadline:   50 * time.Second,
 		RequestTTL:     time.Duration(protocol.RequestTTLSec) * time.Second,
+		PairingTTL:     protocol.PairingTTL,
 	}
 	if v := os.Getenv("RGA_REQUEST_TTL_SEC"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			c.RequestTTL = time.Duration(n) * time.Second
+		}
+	}
+	if v := os.Getenv("RGA_PAIRING_TTL_SEC"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			c.PairingTTL = time.Duration(n) * time.Second
 		}
 	}
 	c.DBPath = get("RGA_DB", c.DataDir+"/rga.db")
