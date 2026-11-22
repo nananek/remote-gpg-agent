@@ -6,7 +6,8 @@ import { state, type UnlockedKey } from './state';
 import { b64, sha256Hex, unb64 } from './b64';
 
 export const PRF_MISSING =
-  'この認証器は PRF 非対応です。iOS 18.4 以降 + iCloud キーチェーンのパスキーが必要です。';
+  'この認証器は PRF 非対応です。iOS 18.4 以降の iCloud キーチェーン、または Chrome の ' +
+  'Google パスワード マネージャーのパスキーが必要です。';
 
 const newSalt = (): Uint8Array => crypto.getRandomValues(new Uint8Array(32));
 
@@ -359,4 +360,66 @@ export async function restore(armored: string, passphrase: string, label: string
   });
 
   state.add({ fingerprint, label, armoredSecret: secret, revocation: '' });
+}
+
+export interface PairingKeyPayload {
+  fingerprint: string;
+  label: string;
+  secret: string;
+  revocation: string;
+}
+
+/**
+ * 追加端末から受け取った鍵を、この端末の PRF で封印し直して預ける。
+ *
+ * 受信した armored 秘密鍵から fingerprint を計算し直すので、申告と中身が
+ * 食い違う鍵はここで落ちる。サーバは復号できないため、封印の自己検証と
+ * 所持証明（sealForKey）が唯一の整合性チェックになる。
+ */
+export async function importFromPairing(items: PairingKeyPayload[]): Promise<{
+  keys: UnlockedKey[];
+  sealed: { keyId: string; ciphertextB64: string }[];
+}> {
+  const prfOutput = state.prfOutput;
+  if (!prfOutput) throw new Error('先に解錠してください');
+  await assertSessionCredential();
+  if (items.length === 0) throw new Error('鍵が 1 つも届きませんでした');
+
+  const keys: UnlockedKey[] = [];
+  const sealed: { keyId: string; ciphertextB64: string }[] = [];
+  for (const item of items) {
+    if (!item || typeof item.secret !== 'string' || typeof item.label !== 'string') {
+      throw new Error('受信した鍵の形式が不正です');
+    }
+    const described = await describe(item.secret);
+    if (described.fingerprint !== item.fingerprint.toUpperCase()) {
+      throw new Error(`鍵の fingerprint が一致しません: ${item.label}`);
+    }
+    await selfTest(item.secret);
+    const revoked = typeof item.revocation === 'string' ? item.revocation : '';
+    const result = await sealForKey(
+      prfOutput,
+      state.credentialId,
+      { fingerprint: described.fingerprint, armoredSecret: item.secret },
+      { secret: item.secret, revocation: revoked },
+    );
+    await api.sealKey({
+      credentialId: state.credentialId,
+      fingerprint: described.fingerprint,
+      label: item.label,
+      publicKeyArmored: described.armoredPublic,
+      hkdfSaltB64: result.env.hkdfSaltB64,
+      ivB64: result.env.ivB64,
+      ciphertextB64: result.env.ciphertextB64,
+      proof: result.upload.proof,
+    });
+    keys.push({
+      fingerprint: described.fingerprint,
+      label: item.label,
+      armoredSecret: item.secret,
+      revocation: revoked,
+    });
+    sealed.push({ keyId: result.upload.keyId, ciphertextB64: result.env.ciphertextB64 });
+  }
+  return { keys, sealed };
 }

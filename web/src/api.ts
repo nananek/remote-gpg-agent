@@ -31,6 +31,24 @@ export interface PushStatus {
   discord: boolean;
 }
 
+/** 端末追加（ペアリング）の状態。 */
+export interface PairingStatus {
+  state: 'created' | 'joined' | 'delivered' | 'aborted' | string;
+  creatorCredentialId: string;
+  joinerCredentialId?: string;
+  joinerLabel?: string;
+  receipt?: string;
+  expiresAt: string;
+}
+
+export interface PairingSignal {
+  seq: number;
+  from: 'creator' | 'joiner' | string;
+  kind: string;
+  blob: string;
+  at: string;
+}
+
 export interface PendingRequest {
   id: string;
   purpose: string;
@@ -93,11 +111,18 @@ export const api = {
       bootstrap ? { 'x-rga-bootstrap': bootstrap } : undefined,
     ),
 
-  registerVerify: (ceremonyId: string, response: unknown, label: string, envelopes: unknown[], bootstrap?: string) =>
+  registerVerify: (
+    ceremonyId: string,
+    response: unknown,
+    label: string,
+    envelopes: unknown[],
+    bootstrap?: string,
+    pairingId?: string,
+  ) =>
     call<{ credentialId: string }>(
       'POST',
       '/api/v1/auth/register/verify',
-      { ceremonyId, response, label, envelopes },
+      { ceremonyId, response, label, envelopes, ...(pairingId ? { pairingId } : {}) },
       bootstrap ? { 'x-rga-bootstrap': bootstrap } : undefined,
     ),
 
@@ -109,6 +134,26 @@ export const api = {
   logout: () => call('POST', '/api/v1/auth/logout', {}),
 
   state: () => call<VaultState>('GET', '/api/v1/state'),
+
+  pairCreate: (body: { pairingId: string; joinProof: string }) =>
+    call<{ pairingId: string; expiresAt: string }>('POST', '/api/v1/pair/create', body),
+
+  pairJoin: (body: { pairingId: string; joinProof: string }) =>
+    call<{ ceremonyId: string; options: any }>('POST', '/api/v1/pair/join', body),
+
+  pairStatus: (pairingId: string) => call<PairingStatus>('GET', `/api/v1/pair/${pairingId}`),
+
+  pairSignal: (pairingId: string, body: { kind: string; blob: string }) =>
+    call<{ seq: number }>('POST', `/api/v1/pair/${pairingId}/signal`, body),
+
+  pairSignals: (pairingId: string, after: number) =>
+    call<{ signals: PairingSignal[] }>('GET', `/api/v1/pair/${pairingId}/signal?after=${after}`),
+
+  pairComplete: (pairingId: string, body: { receipt: string }) =>
+    call<{ state: string }>('POST', `/api/v1/pair/${pairingId}/complete`, body),
+
+  pairAbort: (pairingId: string) =>
+    call<{ ok: boolean }>('POST', `/api/v1/pair/${pairingId}/abort`, {}),
 
   sealKey: (body: {
     credentialId: string;

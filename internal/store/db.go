@@ -9,14 +9,16 @@ import (
 )
 
 var (
-	bCreds = []byte("credentials")
-	bKeys  = []byte("keys")
-	bFpr   = []byte("key_by_fpr")
-	bEnvs  = []byte("envelopes")
-	bSess  = []byte("sessions")
-	bChal  = []byte("challenges")
-	bReqs  = []byte("requests")
-	bPush  = []byte("push")
+	bCreds   = []byte("credentials")
+	bKeys    = []byte("keys")
+	bFpr     = []byte("key_by_fpr")
+	bEnvs    = []byte("envelopes")
+	bSess    = []byte("sessions")
+	bChal    = []byte("challenges")
+	bReqs    = []byte("requests")
+	bPush    = []byte("push")
+	bPair    = []byte("pairings")
+	bPairSig = []byte("pairing_signals")
 )
 
 // ErrNotFound は該当キーが無いことを示す。
@@ -32,13 +34,16 @@ func Open(path string) (*Store, error) {
 	}
 	s := &Store{db: db}
 	if err := db.Update(func(tx *bolt.Tx) error {
-		for _, name := range [][]byte{bCreds, bKeys, bFpr, bEnvs, bSess, bChal, bReqs, bPush} {
+		for _, name := range [][]byte{bCreds, bKeys, bFpr, bEnvs, bSess, bChal, bReqs, bPush, bPair, bPairSig} {
 			if _, err := tx.CreateBucketIfNotExists(name); err != nil {
 				return err
 			}
 		}
-		// 落ちたまま残った期限切れチャレンジを起動時にも掃除する。
-		return pruneExpiredChallenges(tx, time.Now().UTC())
+		// 落ちたまま残った期限切れチャレンジ・pairing を起動時にも掃除する。
+		if err := pruneExpiredChallenges(tx, time.Now().UTC()); err != nil {
+			return err
+		}
+		return prunePairings(tx, time.Now().UTC())
 	}); err != nil {
 		db.Close()
 		return nil, err
